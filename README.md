@@ -2,7 +2,7 @@
 
 A general-purpose computer implemented as a looped transformer with analytically derived weights. No training data, no gradient descent. Programs are written in C, compiled to a 21-opcode ISA, and executed as iterated matrix multiplications through 8 fixed-weight transformer layers.
 
-**[Live Demos](https://your-demo-url.github.io)** | **[Paper (PDF)](technical_report.pdf)** | **[Hugging Face](https://huggingface.co/your-handle/loom)**
+**[Live Demos](https://mkturkcan.github.io/Loom/demos/)** | **[Paper (PDF)](technical_report.pdf)** | **[Hugging Face](https://huggingface.co/mehmetkeremturkcan/Loom)**
 
 ## Highlights
 
