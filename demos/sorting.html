@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sorting — Loom</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <link rel="stylesheet" href="common.css">
+    <style>
+        .sort-container {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        .sort-bars {
+            height: 240px;
+            padding: 20px 16px;
+            align-items: flex-end;
+        }
+
+        .sort-bar {
+            position: relative;
+            min-width: 40px;
+        }
+
+        .sort-bar-value {
+            position: absolute;
+            top: -22px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #111827;
+        }
+
+        .sort-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 12px 16px;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        .sort-controls select {
+            background: #fff;
+            color: #374151;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        .sort-legend {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            padding: 8px;
+            font-size: 0.7rem;
+            color: #6b7280;
+        }
+
+        .sort-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .sort-legend-swatch {
+            width: 12px;
+            height: 8px;
+            border-radius: 2px;
+        }
+
+        .code-body { max-height: 260px; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="index.html">Loom Sorting</a></h1>
+        <p class="subtitle">Bubble sort executed by a transformer with hardcoded weights, no training</p>
+    </header>
+
+    <div class="page-layout">
+        <!-- Network Visualization Panel -->
+        <div class="network-panel" id="networkPanel"></div>
+
+        <!-- Main Panel -->
+        <div class="main-panel">
+            <!-- Controls -->
+            <div class="sort-controls">
+                <button class="btn btn-primary" id="btnRun">Sort</button>
+                <button class="btn btn-secondary" id="btnShuffle">Shuffle</button>
+                <button class="btn btn-secondary" id="btnReset">Reset</button>
+                <div class="speed-control" style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:0.7rem;color:#9ca3af">
+                    <label>Speed</label>
+                    <input type="range" id="speedSlider" min="1" max="100" value="30" style="width:80px;accent-color:#6366f1">
+                </div>
+            </div>
+
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Loading...</span>
+            </div>
+
+            <!-- Sorting Visualization -->
+            <div class="sort-container">
+                <div class="sort-bars" id="sortBars"></div>
+                <div class="sort-legend">
+                    <div class="sort-legend-item"><div class="sort-legend-swatch" style="background:#6366f1"></div> Default</div>
+                    <div class="sort-legend-item"><div class="sort-legend-swatch" style="background:#f59e0b"></div> Comparing</div>
+                    <div class="sort-legend-item"><div class="sort-legend-swatch" style="background:#ef4444"></div> Swapping</div>
+                    <div class="sort-legend-item"><div class="sort-legend-swatch" style="background:#10b981"></div> Sorted</div>
+                </div>
+            </div>
+
+            <!-- C Source Code -->
+            <div class="code-panel">
+                <div class="code-header">
+                    <span class="code-header-title">Bubble Sort: C Source</span>
+                    <span style="font-size:0.7rem;color:#9ca3af" id="instrCount"></span>
+                </div>
+                <div class="code-body" id="codeBody"></div>
+            </div>
+
+            <div class="exec-info" style="display:flex;gap:16px;padding:10px 16px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;font-size:0.75rem;color:#6b7280;box-shadow:0 1px 3px rgba(0,0,0,0.04)">
+                <span>Step: <strong id="execStep">0</strong></span>
+                <span>Comparisons: <strong id="execComps">0</strong></span>
+                <span>Swaps: <strong id="execSwaps">0</strong></span>
+                <span>Status: <strong id="execStatus">Ready</strong></span>
+            </div>
+
+            <div class="info-panel">
+                <h3>How It Works</h3>
+                <p>
+                    Bubble sort is compiled from C to <strong>160 ISA instructions</strong>,
+                    loaded into the transformer's state tensor, and executed step by step.
+                    Each comparison and swap is a sequence of transformer forward passes.
+                </p>
+                <p>
+                    The bars visualize the array in neural memory. Colors indicate which
+                    elements are being compared or swapped in real time.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script src="common.js"></script>
+    <script>
+    (async function() {
+        const ARRAY_SIZE = 6;
+        const DEFAULT_VALUES = [34, 12, 45, 7, 23, 18];
+
+        let config = null;
+        let programInfo = null;
+        let state = null;
+        let initialState = null;
+        let totalSteps = 0;
+        let running = false;
+        let comparisons = 0;
+        let swaps = 0;
+
+        const btnRun = document.getElementById('btnRun');
+        const btnShuffle = document.getElementById('btnShuffle');
+        const btnReset = document.getElementById('btnReset');
+        const speedSlider = document.getElementById('speedSlider');
+        const sortBarsEl = document.getElementById('sortBars');
+        const stateCanvas = document.getElementById('stateCanvas');
+
+        // Build network panel
+        document.getElementById('networkPanel').innerHTML = buildNetworkPanelHTML();
+
+        // Source code for display
+        const SORT_SOURCE = `int main() {
+    int a[6];
+    a[0] = 34; a[1] = 12; a[2] = 45;
+    a[3] = 7;  a[4] = 23; a[5] = 18;
+    int n = 6;
+    int i = 0;
+    while (i < n) {
+        int j = 0;
+        while (j < n - 1 - i) {
+            int aj = a[j];
+            int aj1 = a[j + 1];
+            if (aj > aj1) {
+                a[j] = aj1;
+                a[j + 1] = aj;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    return a[0];
+}`;
+
+        buildCodeView(SORT_SOURCE, 'codeBody');
+
+        // ---- Bar rendering ----
+        function getArrayValues() {
+            if (!state || !config || !programInfo) return DEFAULT_VALUES.slice();
+            const vars = programInfo.variables;
+            const values = [];
+            for (let i = 0; i < ARRAY_SIZE; i++) {
+                const addr = vars['a'] + i;
+                values.push(readMemory(state, config, addr));
+            }
+            return values;
+        }
+
+        function renderBars(values, highlights = {}) {
+            const maxVal = Math.max(...values, 1);
+            sortBarsEl.innerHTML = '';
+            values.forEach((val, i) => {
+                const bar = document.createElement('div');
+                bar.className = 'sort-bar';
+                if (highlights[i]) bar.classList.add(highlights[i]);
+                const pct = (val / 50) * 100;
+                bar.style.height = Math.max(pct, 8) + '%';
+
+                const label = document.createElement('div');
+                label.className = 'sort-bar-value';
+                label.textContent = val;
+                bar.appendChild(label);
+
+                sortBarsEl.appendChild(bar);
+            });
+        }
+
+        // ---- Run sort with visualization ----
+        async function runSort() {
+            if (running) {
+                running = false;
+                btnRun.textContent = 'Sort';
+                setStatus('ready', 'Paused');
+                return;
+            }
+
+            running = true;
+            btnRun.textContent = 'Pause';
+            setStatus('running', 'Sorting...');
+            comparisons = 0;
+            swaps = 0;
+
+            const sourceMap = programInfo.source_map || {};
+
+            let prevLine = 0;
+            const t0 = performance.now();
+
+            while (running) {
+                const pc = getPC(state, config);
+                if (pc === 0) {
+                    running = false;
+                    btnRun.textContent = 'Sort';
+                    setStatus('done', 'Sorted!');
+                    // Mark all bars sorted
+                    renderBars(getArrayValues(), Object.fromEntries(
+                        Array.from({length: ARRAY_SIZE}, (_, i) => [i, 'sorted'])
+                    ));
+                    break;
+                }
+
+                state = await runStep(state, config);
+                _currentState = state;
+                totalSteps++;
+
+                const newPC = getPC(state, config);
+                const curLine = sourceMap[String(newPC)] || 0;
+
+                // Detect interesting events from source lines
+                if (curLine > 0 && curLine !== prevLine) {
+                    const values = getArrayValues();
+
+                    // Detect comparison (line with "aj > aj1" or "if")
+                    const highlights = {};
+                    const vars = programInfo.variables;
+                    const j = readMemory(state, config, vars['j'] || 0);
+                    const iVal = readMemory(state, config, vars['i'] || 0);
+
+                    if (curLine >= 10 && curLine <= 11) {
+                        // Reading aj and aj1 - comparing
+                        if (j >= 0 && j < ARRAY_SIZE) highlights[j] = 'comparing';
+                        if (j+1 >= 0 && j+1 < ARRAY_SIZE) highlights[j+1] = 'comparing';
+                        comparisons++;
+                    } else if (curLine >= 13 && curLine <= 14) {
+                        // Swapping
+                        if (j >= 0 && j < ARRAY_SIZE) highlights[j] = 'swapping';
+                        if (j+1 >= 0 && j+1 < ARRAY_SIZE) highlights[j+1] = 'swapping';
+                        swaps++;
+                    }
+
+                    // Mark sorted portion
+                    for (let k = ARRAY_SIZE - iVal; k < ARRAY_SIZE; k++) {
+                        if (!highlights[k]) highlights[k] = 'sorted';
+                    }
+
+                    renderBars(values, highlights);
+                    highlightCodeLine('codeBody', curLine);
+
+                    document.getElementById('execStep').textContent = totalSteps;
+                    document.getElementById('execComps').textContent = comparisons;
+                    document.getElementById('execSwaps').textContent = swaps;
+
+                    renderHeatmap(document.getElementById('stateCanvas'), state, config);
+
+                    const delay = Math.max(1, 101 - speedSlider.value);
+                    await new Promise(r => setTimeout(r, delay));
+
+                    prevLine = curLine;
+                }
+            }
+
+            const elapsed = performance.now() - t0;
+            updateStat('statSteps', totalSteps);
+            updateStat('statTotal', totalSteps);
+            if (totalSteps > 0) updateStat('statMs', (elapsed / totalSteps).toFixed(1));
+            clearLayerAnimation();
+        }
+
+        // ---- Shuffle ----
+        function doShuffle() {
+            running = false;
+            btnRun.textContent = 'Sort';
+            if (!initialState || !config || !programInfo) return;
+
+            state = copyState(initialState);
+            _currentState = state;
+
+            // Write random values to array slots
+            const vars = programInfo.variables;
+            const values = [];
+            for (let i = 0; i < ARRAY_SIZE; i++) {
+                const v = Math.floor(Math.random() * 45) + 5;
+                values.push(v);
+                writeMemory(state, config, vars['a'] + i, v);
+            }
+
+            // Also update the init assignments so the program re-reads correctly
+            // The values are already in memory, the program just reads them
+            totalSteps = 0;
+            comparisons = 0;
+            swaps = 0;
+            renderBars(values);
+            renderHeatmap(document.getElementById('stateCanvas'), state, config);
+            updateStat('statSteps', 0);
+            document.getElementById('execStep').textContent = 0;
+            document.getElementById('execComps').textContent = 0;
+            document.getElementById('execSwaps').textContent = 0;
+            document.getElementById('execStatus').textContent = 'Ready';
+            setStatus('ready', 'Shuffled. Press Sort');
+        }
+
+        // ---- Reset ----
+        function doReset() {
+            running = false;
+            btnRun.textContent = 'Sort';
+            if (initialState) {
+                state = copyState(initialState);
+                _currentState = state;
+                totalSteps = 0;
+                comparisons = 0;
+                swaps = 0;
+                renderBars(DEFAULT_VALUES);
+                renderHeatmap(document.getElementById('stateCanvas'), state, config);
+                updateStat('statSteps', 0);
+                updateStat('statTotal', 0);
+                updateStat('statMs', '0');
+                document.getElementById('execStep').textContent = 0;
+                document.getElementById('execComps').textContent = 0;
+                document.getElementById('execSwaps').textContent = 0;
+                document.getElementById('execStatus').textContent = 'Ready';
+                setStatus('ready', 'Ready');
+                clearLayerAnimation();
+            }
+        }
+
+        // ---- Events ----
+        btnRun.addEventListener('click', runSort);
+        btnShuffle.addEventListener('click', doShuffle);
+        btnReset.addEventListener('click', doReset);
+
+        // ---- Init ----
+        setStatus('loading', 'Loading model...');
+
+        try {
+            const backend = await loadONNXModel('programs/argmax_155x1024.onnx');
+            updateStat('statBackend', backend);
+
+            const infoResp = await fetch('programs/bubblesort_info.json');
+            programInfo = await infoResp.json();
+            config = programInfo.config;
+            document.getElementById('instrCount').textContent = `${programInfo.num_instructions} instructions`;
+
+            initialState = await loadInitialState('programs/bubblesort_state.json');
+            state = copyState(initialState);
+            _currentState = state;
+            _currentConfig = config;
+
+            renderBars(DEFAULT_VALUES);
+            renderHeatmap(document.getElementById('stateCanvas'), state, config);
+            setStatus('ready', 'Ready. Press Sort');
+
+        } catch (err) {
+            console.error('Init error:', err);
+            setStatus('error', 'Error: ' + err.message);
+        }
+    })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,1922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loom — Opcode Data Flow</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #ffffff;
+  color: #1f2937;
+  overflow-x: hidden;
+}
+
+/* ── Layout ──────────────────────────────────────────── */
+#app {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ── Sidebar ─────────────────────────────────────────── */
+#sidebar {
+  width: 270px;
+  min-width: 270px;
+  border-right: 1px solid #e5e7eb;
+  background: #fafbfc;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+#sidebar-header {
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+#sidebar-header h1 {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #111827;
+}
+
+#sidebar-header .subtitle {
+  font-size: 11.5px;
+  color: #6b7280;
+  margin-top: 6px;
+  line-height: 1.55;
+}
+
+#opList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.op-group { margin-bottom: 4px; }
+
+.op-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #9ca3af;
+  padding: 10px 22px 4px;
+}
+
+.op-btn {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 22px 7px 30px;
+  border: none;
+  background: transparent;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  line-height: 1.4;
+}
+
+.op-btn:hover { background: #f3f4f6; }
+
+.op-btn.active {
+  background: #eff6ff;
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.op-btn.active::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: #3b82f6;
+  border-radius: 0 2px 2px 0;
+}
+
+.op-btn .op-desc {
+  display: block;
+  font-size: 10.5px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 400;
+  color: #9ca3af;
+  margin-top: 1px;
+}
+
+.op-btn.active .op-desc { color: #93c5fd; }
+
+/* Legend */
+.legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 22px;
+  border-top: 1px solid #e5e7eb;
+  background: #fafbfc;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: #6b7280;
+}
+
+.legend-swatch {
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+/* ── Main area ───────────────────────────────────────── */
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+#header {
+  padding: 18px 32px 14px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+#header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+}
+
+#header h2 .op-name {
+  color: #2563eb;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+#header p {
+  font-size: 12.5px;
+  color: #6b7280;
+  margin-top: 3px;
+  line-height: 1.5;
+}
+
+#canvas-wrap {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 20px 16px 32px;
+  overflow: auto;
+}
+
+svg#network {
+  display: block;
+  width: 100%;
+  max-width: 920px;
+  height: auto;
+}
+
+/* ── Tooltip ─────────────────────────────────────────── */
+#tooltip {
+  position: fixed;
+  pointer-events: none;
+  background: #1e293b;
+  color: #f1f5f9;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 320px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  z-index: 100;
+  opacity: 0;
+  transition: opacity 0.12s;
+  white-space: pre-line;
+}
+
+#tooltip.visible { opacity: 1; }
+
+#tooltip .tt-title {
+  font-weight: 600;
+  font-size: 12.5px;
+  margin-bottom: 3px;
+}
+
+#tooltip .tt-type {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 3px;
+  margin-bottom: 5px;
+}
+
+.tt-type.attention { background: #1d4ed8; }
+.tt-type.ffn { background: #7c3aed; }
+.tt-type.copy { background: #059669; }
+.tt-type.write { background: #0d9488; }
+
+/* ── Tensor map ──────────────────────────────────────── */
+#tensor-map {
+  background: #f8fafc;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 10px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+
+#tensor-map .tm-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+#tensor-map .tm-toggle .arrow {
+  transition: transform 0.2s;
+  font-size: 9px;
+}
+
+#tensor-map.open .tm-toggle .arrow {
+  transform: rotate(90deg);
+}
+
+#tensor-map .tm-body {
+  display: none;
+  padding-top: 10px;
+}
+
+#tensor-map.open .tm-body {
+  display: block;
+}
+
+.tm-bar {
+  display: flex;
+  height: 28px;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  margin-bottom: 6px;
+}
+
+.tm-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+  min-width: 0;
+  transition: opacity 0.15s;
+}
+
+.tm-seg:hover {
+  opacity: 0.85;
+}
+
+.tm-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 9.5px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.tm-labels .tm-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tm-labels .tm-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.tm-instr-detail {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 10px;
+  color: #374151;
+  line-height: 1.7;
+}
+
+.tm-instr-detail code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  background: #f3f4f6;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #6366f1;
+}
+
+/* ── Layer badges ────────────────────────────────────── */
+.layer-badge {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.layer-badge.att { background: #dbeafe; color: #1d4ed8; }
+.layer-badge.ffn { background: #ede9fe; color: #6d28d9; }
+.layer-badge.none { background: #f3f4f6; color: #9ca3af; }
+
+/* ── Instruction format in detail ────────────────────── */
+.instr-format {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #fefce8;
+}
+
+.instr-format .if-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #92400e;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.instr-format .if-fields {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.if-field {
+  flex: 1;
+  text-align: center;
+  padding: 4px 2px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.if-field.f-a { background: #fde68a; color: #92400e; }
+.if-field.f-b { background: #bbf7d0; color: #166534; }
+.if-field.f-c { background: #bfdbfe; color: #1e40af; }
+
+.if-desc {
+  font-size: 10px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.if-desc strong {
+  color: #374151;
+}
+
+/* ── Bipolar info ────────────────────────────────────── */
+.bipolar-info {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 10px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.bipolar-info summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #374151;
+  font-size: 10px;
+}
+
+.bipolar-info code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  background: #f3f4f6;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* ── Detail panel ────────────────────────────────────── */
+#detail {
+  width: 300px;
+  min-width: 300px;
+  border-left: 1px solid #e5e7eb;
+  background: #fafbfc;
+  overflow-y: auto;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+#detail-header {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #e5e7eb;
+  position: sticky;
+  top: 0;
+  background: #fafbfc;
+  z-index: 5;
+}
+
+#detail-header h3 {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+#detailLayers {
+  padding: 12px 16px 24px;
+}
+
+.detail-layer {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.detail-layer.highlight {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px #dbeafe;
+}
+
+.detail-layer .dl-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.detail-layer .dl-num {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: #3b82f6;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.detail-layer .dl-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.detail-layer .dl-desc {
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.55;
+}
+
+.detail-layer .dl-desc strong {
+  color: #374151;
+  font-weight: 600;
+}
+
+/* ── Responsive ──────────────────────────────────────── */
+@media (max-width: 1280px) {
+  #detail { display: none; }
+}
+@media (max-width: 860px) {
+  #sidebar { width: 220px; min-width: 220px; }
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+
+<!-- ── Sidebar ────────────────────────────────────────── -->
+<aside id="sidebar">
+  <div id="sidebar-header">
+    <h1>Loom</h1>
+    <div class="subtitle">How 8 transformer layers execute each opcode. Select an instruction to see its data flow.</div>
+    <div style="margin-top:8px;font-size:12px;display:flex;gap:12px">
+      <a href="index.html" style="color:#6b7280;text-decoration:none">&larr; Home</a>
+      <a href="attention.html" style="color:#6366f1;text-decoration:none;font-weight:500">Attention Patterns &rarr;</a>
+    </div>
+  </div>
+  <div id="opList"></div>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-swatch" style="background:#3b82f6"></div>Attention</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#8b5cf6"></div>FFN</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#10b981"></div>Copy</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#0d9488"></div>Write</div>
+  </div>
+  <details class="bipolar-info">
+    <summary>Bipolar encoding</summary>
+    <div style="margin-top:6px">
+      All values stored as <strong>&plusmn;1</strong>, MSB-first.<br>
+      <code>+1</code> = binary 1, <code>-1</code> = binary 0.<br>
+      Zero (8-bit): <code>[-1,-1,-1,-1,-1,-1,-1,-1]</code><br>
+      +5: <code>[-1,-1,-1,-1,-1,+1,-1,+1]</code><br>
+      -1: <code>[+1,+1,+1,+1,+1,+1,+1,+1]</code><br>
+      Signed via two's complement.
+    </div>
+  </details>
+</aside>
+
+<!-- ── Main Canvas ────────────────────────────────────── -->
+<div id="main">
+  <div id="header">
+    <h2>Opcode: <span class="op-name" id="opTitle">INC</span></h2>
+    <p id="opDesc">Increment memory: mem[b] = mem[b] + 1</p>
+  </div>
+  <div id="tensor-map">
+    <div class="tm-toggle" onclick="this.parentElement.classList.toggle('open')">
+      <span class="arrow">&#9654;</span> State Tensor X &isin; {-1, +1}<sup>155&times;1024</sup>
+    </div>
+    <div class="tm-body">
+      <div class="tm-bar" id="tmBar"></div>
+      <div class="tm-labels" id="tmLabels"></div>
+      <div class="tm-instr-detail">
+        <strong>Instruction word</strong> (30 bits across 3 fields, MSB-first bipolar):<br>
+        Rows 0-9: <code>addr_a</code>, opcode when 0-15 or memory address when &ge;16 for SUBLEQ<br>
+        Rows 10-19: <code>addr_b</code>, destination or test operand<br>
+        Rows 20-29: <code>addr_c</code>, source operand or branch target<br>
+        <br>
+        <strong>Program counter</strong> (10-bit, rows 84-93, column 0 only):<br>
+        PC starts at column 96 (= s+m = 32+64). Each forward pass: fetch at PC, execute, update PC.
+        Position encoding rows 94-103 give each column a unique identity for attention addressing.
+      </div>
+    </div>
+  </div>
+  <div id="canvas-wrap">
+    <svg id="network" viewBox="0 0 940 880" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<!-- ── Detail Panel ───────────────────────────────────── -->
+<aside id="detail">
+  <div id="detail-header"><h3>Layer-by-Layer</h3></div>
+  <div id="detailLayers"></div>
+</aside>
+
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ════════════════════════════════════════════════════════
+// DATA MODEL
+// ════════════════════════════════════════════════════════
+
+const NODES = [
+  { id: 'pc',    label: 'PC',       color: '#f59e0b', desc: 'Program Counter\n10-bit position, indexes instruction memory' },
+  { id: 'instr', label: 'Instr',    color: '#6366f1', desc: 'Instruction Register\n30 bits: addr_a (opcode), addr_b, addr_c' },
+  { id: 'memb',  label: 'mem[b]',   color: '#10b981', desc: 'Target Memory Cell\n8-bit value at address b' },
+  { id: 'memc',  label: 'mem[c]',   color: '#14b8a6', desc: 'Source Memory Cell\n8-bit value at address c' },
+  { id: 'sub',   label: 'scr_sub',  color: '#ef4444', desc: 'Subtrahend Register\n8-bit scratchpad for L4 subtraction' },
+  { id: 'min',   label: 'scr_min',  color: '#8b5cf6', desc: 'Minuend / Result Register\n8-bit scratchpad, holds L4 output' },
+  { id: 'flag',  label: 'Flag',     color: '#f97316', desc: 'Branch Control Flag\nPositive = take branch, else sequential' },
+];
+
+const NI = {};
+NODES.forEach((n, i) => NI[n.id] = i);
+
+const LAYERS = [
+  { id: 'L1', name: 'Fetch Instruction',         short: 'Fetch' },
+  { id: 'L2', name: 'Read Operands + Decode',     short: 'Decode' },
+  { id: 'L3', name: 'Indirect Read + Correction',  short: 'Correct' },
+  { id: 'L4', name: 'Subtract (Arithmetic)',       short: 'Subtract' },
+  { id: 'L5', name: 'Write Memory',               short: 'Write' },
+  { id: 'L6', name: 'Branch Flag + PC+1',         short: 'Flag' },
+  { id: 'L7', name: 'Branch Select',              short: 'Select' },
+  { id: 'L8', name: 'Error Correction',           short: 'Correct' },
+];
+
+// Connection types and their visual properties
+const ATT = 'attention', FFN = 'ffn', CPY = 'copy', WRT = 'write';
+const TYPE_META = {
+  attention: { color: '#3b82f6', glow: 'rgba(59,130,246,0.15)', width: 2.4 },
+  ffn:       { color: '#8b5cf6', glow: 'rgba(139,92,246,0.15)', width: 2.4 },
+  copy:      { color: '#10b981', glow: 'rgba(16,185,129,0.12)', width: 2.0 },
+  write:     { color: '#0d9488', glow: 'rgba(13,148,136,0.15)', width: 2.4 },
+};
+
+// ── Opcode definitions ──────────────────────────────
+// Each opcode: { label, desc, group, code, connections[8], layerDescs[8] }
+// Each connection: { from, to, label, type, detail? }
+
+const OPCODES = {
+
+  // ── Core ──
+  SUBLEQ: {
+    label: 'SUBLEQ', desc: 'mem[b] -= mem[a]; if result <= 0: PC = c',
+    group: 'Core', code: 'a >= 32',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction at PC', type:ATT,
+         detail:'Q=K symmetric on PC + pos_enc. Softmax concentrates on the column whose position encoding matches PC. V copies 30-bit command (a,b,c) into scratch_cmd.' }],
+      [{ from:'instr', to:'memb', label:'Head 2: addr_b -> mem[b]', type:ATT,
+         detail:'Q=K matches scratch_cmd[b] against position encodings. V copies 8-bit memory value to buf_b.' },
+       { from:'instr', to:'memc', label:'Head 3: addr_c -> mem[c]', type:ATT,
+         detail:'Same mechanism for operand c. buf_c stores branch target address.' },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY,
+         detail:'Always-copy FFN: gated transfer of buf_b to scr_min. Runs for all opcodes.' },
+       { from:'instr', to:'sub', label:'Head 1: addr_a -> mem[a] -> scr_sub', type:ATT,
+         detail:'SUBLEQ mode (a >= 32): copies buf_a -> scr_sub. Mode detected by bit 5 of addr_a = +1.' }],
+      [{ from:'sub', to:'sub', label:'Snap scr_sub to +/-1', type:FFN,
+         detail:'6-threshold correction per bit with epsilon=0.1 deadzone. Fixes floating-point errors from softmax averaging.' },
+       { from:'min', to:'min', label:'Snap scr_min to +/-1', type:FFN,
+         detail:'Same 6-ReLU pattern snaps any value in (-1-eps, 1+eps) back to {-1, +1}.' }],
+      [{ from:'sub', to:'min', label:'scr_min = scr_min - scr_sub', type:FFN,
+         detail:'6-threshold borrow chain: for each bit i, W1 reads bits 1..i from both operands with negated weights on scr_sub (bit flip). Bias = 2^i (carry_in=1 for two\'s complement). 6 ReLU rows extract each result bit.' }],
+      [{ from:'min', to:'memb', label:'Write result -> mem[b]', type:WRT,
+         detail:'Q=K matches scratch_cmd[b] against positions. V copies scr_min to idx_memory rows. FFN: new_mem = 2*buffer - old_mem via ReLU gating.' }],
+      [{ from:'min', to:'flag', label:'Sign + zero -> flag', type:FFN,
+         detail:'Flag = sign_bit(result) + zero_check + SUBLEQ_gate. Zero check: all N bits = -1 -> output 1. SUBLEQ gate: addr_a[5]=+1 -> output 0.5. Flag > 0 means branch taken.' },
+       { from:'pc', to:'pc', label:'Compute PC + 1', type:FFN,
+         detail:'Same 6-threshold addition as L4 but for 10-bit PC. Merged into same layer (independent FFN rows).' }],
+      [{ from:'flag', to:'pc', label:'Flag > 0 -> PC = c; else PC+1', type:FFN,
+         detail:'W1 tests sign of flag. Positive: add c, subtract PC+1. Non-positive: keep PC+1. Mux between branch target and sequential.' },
+       { from:'memc', to:'pc', label:'Branch target c', type:CPY }],
+      [{ from:'pc', to:'pc', label:'Snap PC bits', type:FFN,
+         detail:'6-threshold correction for each PC bit. Clean bipolar for next cycle.' },
+       { from:'memb', to:'memb', label:'Snap memory', type:FFN }],
+    ],
+    layerDescs: [
+      'Symmetric attention (Q=K) matches <strong>PC</strong> against column position encodings. The matching column\'s 30-bit command (a, b, c) is copied to scratch_cmd via buffer.',
+      'Three attention heads read <strong>mem[a]</strong>, <strong>mem[b]</strong>, <strong>mem[c]</strong> in parallel. SUBLEQ mode detected (a>=32): FFN copies buf_a -> scr_sub, buf_b -> scr_min.',
+      'No indirect access needed. <strong>Snap correction</strong>: 6-threshold ReLU per bit cleans up softmax averaging errors.',
+      '<strong>Core arithmetic</strong>: 6-threshold borrow chain computes scr_min - scr_sub = mem[b] - mem[a]. Negated weights implement bit-flip; bias provides carry-in.',
+      'Attention matches <strong>addr_b</strong> against positions. Writes subtraction result to <strong>mem[b]</strong>.',
+      'Branch flag = sign(result) + zero(result) + SUBLEQ_gate. Flag > 0 when result <= 0. PC+1 computed in parallel.',
+      'Mux: if flag > 0 -> <strong>PC = c</strong> (branch). Else -> <strong>PC = PC+1</strong> (continue).',
+      'Error correction snaps all bipolar values back to {-1, +1} for next cycle.',
+    ],
+  },
+
+  // ── Arithmetic ──
+  INC: {
+    label: 'INC b', desc: 'mem[b] = mem[b] + 1',
+    group: 'Arithmetic', code: 'opcode 6',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction at PC', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> read mem[b]', type:ATT,
+         detail:'Head 2 reads mem[b] into buf_b. Head 1 (addr_a) is the opcode, not an address.' },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY },
+       { from:'instr', to:'sub', label:'INC gate -> scr_sub = -1', type:FFN,
+         detail:'Opcode pattern match: W1 weights match INC (000110). Output fires, W2 writes +1 to all N bits of scr_sub. Bipolar all-positive = integer -1.' }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'mem[b] - (-1) = mem[b] + 1', type:FFN,
+         detail:'Subtraction with scr_sub = -1 is equivalent to adding 1. The borrow chain naturally handles carry propagation.' }],
+      [{ from:'min', to:'memb', label:'Write result -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC = PC + 1', type:FFN,
+         detail:'INC suppress row prevents SUBLEQ-style branching. Only PC increment fires.' }],
+      [{ from:'pc', to:'pc', label:'Select PC+1 (no branch)', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch the INC instruction from memory at the current PC.',
+      'Read <strong>mem[b]</strong> via attention. FFN detects INC opcode pattern (000110 in bipolar) and sets <strong>scr_sub = -1</strong> (all bits +1 = integer -1 in two\'s complement).',
+      'Snap correction cleans floating-point errors from attention averaging.',
+      '<strong>scr_min - scr_sub</strong> = mem[b] - (-1) = <strong>mem[b] + 1</strong>. The subtraction layer doubles as addition by negating the subtrahend.',
+      'Attention writes the incremented value back to <strong>mem[b]</strong>.',
+      'INC suppress row blocks SUBLEQ branching. PC incremented by 1.',
+      'No branch: flag <= 0 -> PC = PC+1.',
+      'Snap all values to clean bipolar for next cycle.',
+    ],
+  },
+
+  DEC: {
+    label: 'DEC b', desc: 'mem[b] = mem[b] - 1',
+    group: 'Arithmetic', code: 'opcode 7',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> read mem[b]', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY },
+       { from:'instr', to:'sub', label:'DEC gate -> scr_sub = +1', type:FFN,
+         detail:'Opcode 7 pattern fires. W2 writes -1 to bits 0..6 and +1 to bit 7 (LSB). Bipolar [-1]*7 + [+1] = integer 1.' }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'mem[b] - 1', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write result -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch the DEC instruction.',
+      'Read <strong>mem[b]</strong>. FFN detects DEC opcode and sets <strong>scr_sub = +1</strong> (integer 1 in bipolar: [-1]*7 + [+1]).',
+      'Snap correction on registers.',
+      '<strong>scr_min - scr_sub</strong> = mem[b] - 1.',
+      'Write decremented value to <strong>mem[b]</strong>.',
+      'PC incremented. No branch.',
+      'Select PC+1.',
+      'Error correction snap.',
+    ],
+  },
+
+  ADD: {
+    label: 'ADD b, c', desc: 'mem[b] = mem[b] + mem[c]',
+    group: 'Arithmetic', code: 'opcode 2',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY },
+       { from:'memc', to:'sub', label:'ADD: scr_sub = -buf_c (negate)', type:FFN,
+         detail:'Two-pass negation: (1) One\'s complement: flip all buf_c bits. (2) Add-1 carry chain: for each bit, check if all lower bits are -1, flip if carry propagates. Result: scr_sub = -mem[c]. Uses 4N FFN rows.' }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'mem[b] - (-mem[c]) = mem[b] + mem[c]', type:FFN,
+         detail:'Subtraction of negated value equals addition. The 6-threshold borrow chain handles all carry propagation in a single layer.' }],
+      [{ from:'min', to:'memb', label:'Write sum -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch the ADD instruction.',
+      'Read <strong>mem[b]</strong> and <strong>mem[c]</strong>. FFN computes <strong>scr_sub = -mem[c]</strong> via two\'s complement negation (flip bits + carry chain). The most complex L2 routing at 4N FFN rows.',
+      'Snap correction on scr_sub and scr_min.',
+      '<strong>scr_min - (-mem[c])</strong> = mem[b] + mem[c]. Subtraction of a negated value implements addition.',
+      'Write the sum to <strong>mem[b]</strong>.',
+      'PC + 1. ADD suppress row blocks SUBLEQ branching.',
+      'No branch: PC = PC+1.',
+      'Error correction.',
+    ],
+  },
+
+  SUB: {
+    label: 'SUB b, c', desc: 'mem[b] = mem[b] - mem[c]',
+    group: 'Arithmetic', code: 'opcode 15',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY },
+       { from:'memc', to:'sub', label:'SUB: scr_sub = buf_c', type:FFN,
+         detail:'Direct copy of buf_c to scr_sub via 2N FFN rows. No negation needed unlike ADD.' }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'mem[b] - mem[c]', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write difference -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch the SUB instruction.',
+      'Read both operands. <strong>scr_sub = mem[c]</strong> (direct copy, no negation needed unlike ADD).',
+      'Snap correction.',
+      '<strong>scr_min - scr_sub</strong> = mem[b] - mem[c]. Direct subtraction.',
+      'Write difference to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  // ── Logic ──
+  AND: {
+    label: 'AND b, c', desc: 'mem[b] = mem[b] & mem[c]',
+    group: 'Logic', code: 'opcode 12',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min (base)', type:CPY },
+       { from:'memc', to:'min', label:'AND: -2 when b=1 & c=0', type:FFN,
+         detail:'Default scr_min = mem[b]. For each bit where buf_b=+1 AND buf_c=-1, subtract 2 (flips +1 -> -1). Only N correction rows needed. AND: result=+1 only when both inputs are +1.' },
+       { from:'instr', to:'sub', label:'scr_sub = 0 (pass-through)', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through (sub=0)', type:FFN,
+         detail:'scr_sub = 0, so subtraction is identity: result = scr_min.' }],
+      [{ from:'min', to:'memb', label:'Write AND result -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read both operands. AND computed in FFN: start with <strong>scr_min = mem[b]</strong>, then for each bit where mem[b]=1 but mem[c]=0, subtract 2 (flip +1 -> -1). Only N rows needed.',
+      'Snap correction.',
+      '<strong>Pass-through</strong>: scr_sub = 0, so subtraction is identity.',
+      'Write AND result to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  OR: {
+    label: 'OR b, c', desc: 'mem[b] = mem[b] | mem[c]',
+    group: 'Logic', code: 'opcode 13',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min (base)', type:CPY },
+       { from:'memc', to:'min', label:'OR: +2 when b=0 & c=1', type:FFN,
+         detail:'Default scr_min = mem[b]. For each bit where buf_b=-1 AND buf_c=+1, add 2 (flips -1 -> +1). Only N correction rows. OR: result = +1 if at least one input is +1.' },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write OR result -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read both operands. OR computed in FFN: start with <strong>scr_min = mem[b]</strong>, then for each bit where mem[b]=0 but mem[c]=1, add 2 (flip -1 -> +1). Mirror of AND.',
+      'Snap correction.',
+      'Pass-through: scr_sub = 0.',
+      'Write OR result to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  XOR: {
+    label: 'XOR b, c', desc: 'mem[b] = mem[b] ^ mem[c]',
+    group: 'Logic', code: 'opcode 14',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min (base)', type:CPY },
+       { from:'memc', to:'min', label:'XOR: flip when both same or both differ', type:FFN,
+         detail:'Two cases: (1) both +1: subtract 2. (2) buf_b=-1, buf_c=+1: add 2. Uses 2N correction rows. In bipolar, XOR(a,b) = -a*b.' },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write XOR result -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read both operands. XOR uses <strong>2N correction rows</strong>: (1) buf_b=+1 AND buf_c=+1 -> subtract 2. (2) buf_b=-1 AND buf_c=+1 -> add 2. In bipolar encoding, XOR(a,b) = -a*b.',
+      'Snap correction.',
+      'Pass-through: scr_sub = 0.',
+      'Write XOR result to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  // ── Shift ──
+  SHL: {
+    label: 'SHL b', desc: 'mem[b] = mem[b] << 1',
+    group: 'Shift', code: 'opcode 8',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'memb', to:'min', label:'SHL: shift correction on scr_min', type:FFN,
+         detail:'Start with scr_min = buf_b. Apply SHL correction: for each bit i, add delta = buf_b[i+1] - buf_b[i]. LSB set to 0 (-1). Uses 2(N-1)+1 FFN rows.' },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write shifted -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read <strong>mem[b]</strong>. SHL correction: result[i] = input[i+1], result[N-1] = 0. Computed as delta corrections added to scr_min. 2(N-1)+1 FFN rows.',
+      'Snap correction.',
+      'Pass-through (scr_sub = 0).',
+      'Write shifted value to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  SHR: {
+    label: 'SHR b', desc: 'mem[b] = mem[b] >> 1 (arithmetic)',
+    group: 'Shift', code: 'opcode 9',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'memb', to:'min', label:'SHR: shift-right correction on scr_min', type:FFN,
+         detail:'Start with scr_min = buf_b. For i > 0: add delta = buf_b[i-1] - buf_b[i]. Sign bit (i=0) preserved. Uses 2(N-1) FFN rows.' },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write shifted -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read <strong>mem[b]</strong>. Arithmetic SHR: result[i] = input[i-1] for i > 0, result[0] = input[0] (sign preserved). Delta corrections on scr_min.',
+      'Snap correction.',
+      'Pass-through (scr_sub = 0).',
+      'Write shifted value to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  // ── Control Flow ──
+  JMP: {
+    label: 'JMP c', desc: 'PC = c (unconditional jump)',
+    group: 'Control', code: 'opcode 3',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c (branch target)', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write (identity)', type:WRT }],
+      [{ from:'instr', to:'flag', label:'JMP -> flag = +2 (always branch)', type:FFN,
+         detail:'JMP opcode pattern fires row with W2 weight +2.0 on flag. Flag = 2 > 0: branch always taken.' },
+       { from:'pc', to:'pc', label:'PC + 1 (computed but overridden)', type:FFN }],
+      [{ from:'flag', to:'pc', label:'Flag > 0 -> PC = c', type:FFN,
+         detail:'Flag is positive (2.0), so branch target c is selected. PC+1 is discarded.' },
+       { from:'memc', to:'pc', label:'Branch target c', type:CPY }],
+      [{ from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read operands. scr_sub = 0 (no arithmetic needed for JMP).',
+      'Snap correction.',
+      'Pass-through (no computation).',
+      'Memory write is identity (writes mem[b] back unchanged).',
+      '<strong>JMP gate</strong> fires unconditionally -> flag = +2. PC+1 also computed but will be overridden.',
+      'Flag > 0 -> <strong>PC = c</strong>. Branch target from instruction loaded.',
+      'Snap PC for next cycle.',
+    ],
+  },
+
+  JZ: {
+    label: 'JZ b, c', desc: 'if mem[b] == 0: PC = c',
+    group: 'Control', code: 'opcode 4',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> read mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c (branch target)', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write (identity)', type:WRT }],
+      [{ from:'min', to:'flag', label:'JZ: flag = +2 when all bits = -1', type:FFN,
+         detail:'JZ row: W1 reads opcode pattern + sum of all result bits. Fires (output 0.5) only when opcode matches AND all N bits are -1 (value is zero). W2 = +2 -> flag += 2.' },
+       { from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'flag', to:'pc', label:'Flag > 0 -> PC = c; else PC+1', type:FFN },
+       { from:'memc', to:'pc', label:'Branch target c', type:CPY }],
+      [{ from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read <strong>mem[b]</strong> (value to test) and <strong>addr_c</strong> (branch target). scr_sub = 0.',
+      'Snap correction.',
+      'Pass-through: result = mem[b] (unchanged for test).',
+      'Write identity (mem[b] unchanged).',
+      '<strong>JZ gate</strong>: fires when opcode=JZ AND all result bits = -1 (value is zero). Combined with suppress rows blocking SUBLEQ branching.',
+      'Flag > 0 -> <strong>PC = c</strong>. Else -> PC = PC+1.',
+      'Snap PC.',
+    ],
+  },
+
+  JNZ: {
+    label: 'JNZ b, c', desc: 'if mem[b] != 0: PC = c',
+    group: 'Control', code: 'opcode 5',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> read mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c (branch target)', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write (identity)', type:WRT }],
+      [{ from:'min', to:'flag', label:'JNZ: flag when any bit != -1', type:FFN,
+         detail:'JNZ row: W1 reads opcode pattern (10x scaled) + sum of result bits (positive weights). Fires when opcode matches AND at least one bit is +1 (not zero). W2 = +2 -> flag > 0.' },
+       { from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'flag', to:'pc', label:'Flag > 0 -> PC = c; else PC+1', type:FFN },
+       { from:'memc', to:'pc', label:'Branch target c', type:CPY }],
+      [{ from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read <strong>mem[b]</strong> and branch target. scr_sub = 0.',
+      'Snap correction.',
+      'Pass-through: result = mem[b] (for test).',
+      'Identity write (mem[b] unchanged).',
+      '<strong>JNZ gate</strong>: opcode pattern uses 10x scaling, result bit weights are +1. Fires when at least one bit is +1 (value not zero). Threshold tuned to distinguish zero from non-zero.',
+      'Flag > 0 -> <strong>PC = c</strong>. Else PC+1.',
+      'Snap PC.',
+    ],
+  },
+
+  CMP: {
+    label: 'CMP b, c', desc: 'if mem[b] < 0: PC = c',
+    group: 'Control', code: 'opcode 10',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> read mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c (branch target)', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min', type:CPY },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write (identity)', type:WRT }],
+      [{ from:'min', to:'flag', label:'CMP: sign bit -> flag; zero correction', type:FFN,
+         detail:'Sign bit (+1 if negative) adds to flag. CMP zero-correction row fires when value=0 AND opcode=CMP, subtracting 2. This converts SUBLEQ\'s "branch if <= 0" to CMP\'s "branch if < 0".' },
+       { from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'flag', to:'pc', label:'Negative -> PC = c; else PC+1', type:FFN },
+       { from:'memc', to:'pc', label:'Branch target', type:CPY }],
+      [{ from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read <strong>mem[b]</strong> and branch target. scr_sub = 0 (CMP doesn\'t modify memory).',
+      'Snap correction.',
+      'Pass-through: scr_min = mem[b] (unmodified for sign test).',
+      'Identity write: <strong>mem[b] not modified</strong> by CMP.',
+      '<strong>CMP</strong>: flag = sign_bit. Zero-correction row subtracts 2 when value=0, converting "branch if <= 0" to strict "branch if < 0".',
+      'If mem[b] < 0 -> <strong>PC = c</strong>. Else PC+1.',
+      'Snap PC.',
+    ],
+  },
+
+  // ── Memory ──
+  MOV: {
+    label: 'MOV b, c', desc: 'mem[b] = mem[c]',
+    group: 'Memory', code: 'opcode 1',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memc', to:'min', label:'MOV: scr_min corrected to buf_c', type:FFN,
+         detail:'Default scr_min = buf_b. MOV correction: for each bit where buf_c != buf_b, add +/-2 to flip. 2N correction rows. Result: scr_min = mem[c].' },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write mem[c] -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read both operands. <strong>MOV correction</strong>: scr_min starts as buf_b, then per-bit delta correction replaces it with buf_c (mem[c]). 2N FFN rows.',
+      'Snap correction.',
+      'Pass-through (scr_sub = 0).',
+      'Write <strong>mem[c]</strong> value to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'Select PC+1.',
+      'Error correction.',
+    ],
+  },
+
+  LOAD: {
+    label: 'LOAD b, c', desc: 'mem[b] = mem[mem[c]] (indirect)',
+    group: 'Memory', code: 'opcode 11',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memc', label:'addr_c -> mem[c] (pointer)', type:ATT },
+       { from:'instr', to:'memb', label:'addr_b (target)', type:ATT },
+       { from:'memc', to:'min', label:'LOAD: buf_c -> load_temp (ptr->pos_enc)', type:FFN,
+         detail:'Converts N-bit pointer value to logn-bit position encoding in load_temp. Indicator-gated to scratchpad only.' },
+       { from:'instr', to:'sub', label:'scr_sub = 0; zero scr_min', type:FFN }],
+      [{ from:'memc', to:'min', label:'L3: load_temp -> mem[ptr] -> scr_min', type:ATT,
+         detail:'Q=K symmetric on load_temp + pos_enc. Matches pointer against column positions. V copies matched column\'s memory value to scr_min. This is the indirect read.' },
+       { from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write mem[mem[c]] -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read <strong>mem[c]</strong> (pointer). L2 FFN converts pointer to <strong>load_temp</strong> position encoding. scr_min zeroed.',
+      '<strong>L3 Head 1 (LOAD)</strong>: attention on load_temp + pos_enc finds column at address mem[c]. V copies that column\'s memory to <strong>scr_min</strong>. Indirect read.',
+      'Pass-through.',
+      'Write indirectly-read value to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  FIND: {
+    label: 'FIND b, c', desc: 'mem[b] = index where mem[i] == mem[c]',
+    group: 'Memory', code: 'opcode 16',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memc', label:'addr_c -> mem[c] (search value)', type:ATT },
+       { from:'instr', to:'memb', label:'addr_b (target)', type:ATT },
+       { from:'memc', to:'min', label:'FIND: buf_c -> find_temp', type:FFN,
+         detail:'Copies search value from buf_c to find_temp (N bits). Indicator-gated to scratchpad only.' },
+       { from:'instr', to:'sub', label:'scr_sub = 0; zero scr_min', type:FFN }],
+      [{ from:'memc', to:'min', label:'L3: find_temp -> tag match -> scr_min', type:ATT,
+         detail:'Q=K symmetric on find_temp + idx_memory. Content-addressable search: matches search value against all memory columns. V copies matched column\'s address tag to scr_min.' },
+       { from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write found index -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read <strong>mem[c]</strong> (search value). FFN copies to <strong>find_temp</strong>. scr_min zeroed.',
+      '<strong>L3 Head 2 (FIND)</strong>: content-addressable search. Matches search value against all memory cells\' values. V returns the matching column\'s <strong>address tag</strong>.',
+      'Pass-through.',
+      'Write found index to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  // ── Advanced ──
+  CMOV: {
+    label: 'CMOV b, c', desc: 'if mem[b] < 0: mem[b] = mem[c]',
+    group: 'Advanced', code: 'opcode 18',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memb', to:'min', label:'CMOV: conditional correction', type:FFN,
+         detail:'Default scr_min = buf_b (always-copy). When sign bit buf_b[0] = +1 (negative), replace scr_min with buf_c via per-bit correction gated by sign. (2N-1) FFN rows with 3-way gating (opcode + sign + bit value).' },
+       { from:'instr', to:'sub', label:'scr_sub = 0', type:FFN }],
+      [{ from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write result -> mem[b]', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      'Read both operands. <strong>CMOV</strong>: if sign of mem[b] is negative (buf_b[0] = +1), replace scr_min with buf_c via 3-way gated correction (opcode + sign + bit). Otherwise scr_min = mem[b] (no change).',
+      'Snap correction.',
+      'Pass-through (scr_sub = 0).',
+      'Write result to <strong>mem[b]</strong>. If negative: mem[c]. If non-negative: mem[b] (unchanged).',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  MULACC: {
+    label: 'MULACC b, c', desc: 'mem[b] = (mem[b]<<1) + (MSB ? mem[c] : 0)',
+    group: 'Advanced', code: 'opcode 19',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memb', to:'min', label:'SHL correction on scr_min', type:FFN,
+         detail:'Same SHL delta correction as opcode 8: result[i] = buf_b[i+1], LSB = 0. Implements the "<<1" part.' },
+       { from:'memc', to:'sub', label:'Conditional: scr_sub = -buf_c when MSB', type:FFN,
+         detail:'Two-pass conditional negation gated by buf_b[0] (MSB). When MSB=+1: flip + carry = scr_sub = -mem[c]. When MSB=-1: scr_sub = 0. Uses 4N+1 FFN rows.' }],
+      [{ from:'sub', to:'sub', label:'Snap to +/-1', type:FFN },
+       { from:'min', to:'min', label:'Snap to +/-1', type:FFN }],
+      [{ from:'sub', to:'min', label:'shifted - (-mem[c]) or shifted - 0', type:FFN,
+         detail:'If MSB set: (mem[b]<<1) + mem[c]. If clear: mem[b]<<1. One shift-and-add step of multiplication.' }],
+      [{ from:'min', to:'memb', label:'Write MULACC result', type:WRT }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      '<strong>MULACC</strong> combines SHL + conditional ADD. SHL correction shifts scr_min left. Conditional negation: if MSB(mem[b])=1, scr_sub = -mem[c]. 5N FFN rows total - the most complex L2.',
+      'Snap correction.',
+      'If MSB set: <strong>(mem[b]<<1) + mem[c]</strong>. If clear: <strong>mem[b]<<1</strong>. One step of shift-and-add multiplication. 8 MULACC steps = full 8x8 multiply.',
+      'Write result to <strong>mem[b]</strong>.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction.',
+    ],
+  },
+
+  STORE: {
+    label: 'STORE b, c', desc: 'mem[mem[c]] = mem[b], indirect memory write',
+    group: 'Advanced', code: 'opcode 20',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'Head 2: addr_b -> mem[b] (source value)', type:ATT },
+       { from:'instr', to:'memc', label:'Head 3: addr_c -> mem[c] (pointer)', type:ATT },
+       { from:'memb', to:'min', label:'buf_b -> scr_min (value to write)', type:CPY,
+         detail:'Default always-copy transfers buf_b to scr_min. For STORE we keep this: scr_min = mem[src].' },
+       { from:'memc', to:'instr', label:'STORE: rewrite addr_b with pos_enc(s + pointer)', type:FFN,
+         detail:'Key trick: FFN clears old addr_b bits from scratch_cmd and writes new bits derived from buf_c (pointer value). This redirects L5 Head 1 to write at the dereferenced address instead of the literal b field. scr_sub set to 0 (pass-through for L4).' }],
+      [{ from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through (scr_sub = 0)', type:FFN }],
+      [{ from:'min', to:'memb', label:'Write scr_min → mem[mem[c]]', type:WRT,
+         detail:'L5 attention matches the rewritten addr_b (now pointing to mem[c] dereferenced). Writes scr_min = mem[b] to the target memory cell.' }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      '<strong>STORE</strong> L2 routing: Read mem[b] (source) and mem[c] (pointer). FFN <strong>rewrites addr_b</strong> in scratch_cmd with the position encoding of the dereferenced address (s + mem[c]). Sets scr_sub = 0.',
+      'Snap correction.',
+      'Pass-through (scr_sub is 0, no subtraction).',
+      'L5 attention matches the <strong>rewritten addr_b</strong> → writes scr_min (= mem[b]) to <strong>mem[mem[c]]</strong>. This is the indirect write.',
+      'PC + 1.',
+      'No branch (STORE suppressed in flag computation).',
+      'Error correction.',
+    ],
+  },
+
+  SWAP: {
+    label: 'SWAP b, c', desc: 'swap mem[b] and mem[c] atomically',
+    group: 'Advanced', code: 'opcode 17',
+    connections: [
+      [{ from:'pc', to:'instr', label:'Fetch instruction', type:ATT }],
+      [{ from:'instr', to:'memb', label:'addr_b -> mem[b]', type:ATT },
+       { from:'instr', to:'memc', label:'addr_c -> mem[c]', type:ATT },
+       { from:'memb', to:'min', label:'SWAP: scr_min = buf_c (not buf_b)', type:FFN,
+         detail:'Default scr_min = buf_b. SWAP correction replaces scr_min with buf_c via per-bit gated correction: for each bit i, add (buf_c[i] - buf_b[i]) gated by opcode pattern. Also sets scr_sub = 0.' },
+       { from:'memc', to:'sub', label:'SWAP: buf_c ← buf_b', type:FFN,
+         detail:'Copy buf_b to buf_c for later use by L5 Head 2. Per-bit MOV correction gated by SWAP opcode pattern.' }],
+      [{ from:'sub', to:'sub', label:'Snap', type:FFN },
+       { from:'min', to:'min', label:'Snap', type:FFN }],
+      [{ from:'sub', to:'min', label:'Pass-through (scr_sub = 0)', type:FFN }],
+      [{ from:'min', to:'memb', label:'Head 1: scr_min → mem[b]', type:WRT },
+       { from:'memc', to:'memc', label:'Head 2: buf_c → mem[c] via find_temp', type:WRT,
+         detail:'L5 second attention head routes 2*buf_c + memory → find_temp at matched addr_c column. FFN computes 2*(2*0.5*mem[b] + mem[c]) - 2*mem[c] = 2*mem[b], snapped to mem[b]. Writes mem[b] value into mem[c] position.' }],
+      [{ from:'pc', to:'pc', label:'PC + 1', type:FFN }],
+      [{ from:'pc', to:'pc', label:'Select PC+1', type:FFN }],
+      [{ from:'memb', to:'memb', label:'Error correction', type:FFN },
+       { from:'memc', to:'memc', label:'Error correction', type:FFN },
+       { from:'pc', to:'pc', label:'Snap PC', type:FFN }],
+    ],
+    layerDescs: [
+      'Fetch instruction.',
+      '<strong>SWAP</strong> L2 routing: (1) Replace scr_min with buf_c so Head 1 writes mem[c]→mem[b]. (2) Copy buf_b into buf_c so Head 2 can write mem[b]→mem[c]. (3) Set scr_sub = 0.',
+      'Snap correction.',
+      'Pass-through (scr_sub is 0, no subtraction).',
+      '<strong>Two-head write.</strong> Head 1 writes scr_min (= mem[c]) → <strong>mem[b]</strong>. Head 2 writes buf_c (= mem[b]) → <strong>mem[c]</strong> via find_temp. Both writes happen simultaneously.',
+      'PC + 1.',
+      'No branch.',
+      'Error correction on both mem[b] and mem[c].',
+    ],
+  },
+};
+
+// ── Per-opcode layer mechanisms ──────────────────────
+// Each entry: { att: null | { heads, desc }, ffn: null | { rows, desc } }
+// Derived from extended_isa_v4.py layer implementations
+
+const LAYER_MECHS = {
+  _default: [
+    { att: { heads: 1, desc: 'Q=K on PC + pos_enc' }, ffn: null },
+    { att: { heads: 3, desc: 'addr_a, addr_b, addr_c match' }, ffn: { rows: '2N', desc: 'opcode routing' } },
+    { att: null, ffn: { rows: '12N', desc: 'snap correction' } },
+    { att: null, ffn: { rows: '6N', desc: 'borrow chain' } },
+    { att: { heads: 1, desc: 'addr_b write' }, ffn: { rows: '2N', desc: '2·buf − old' } },
+    { att: null, ffn: { rows: '~20', desc: 'flag + PC+1' } },
+    { att: null, ffn: { rows: '~10', desc: 'branch mux' } },
+    { att: null, ffn: { rows: '6(N+logn)', desc: 'snap all' } },
+  ],
+};
+
+// Opcode-specific overrides (only layers that differ from _default)
+const MECH_OVERRIDES = {
+  SUBLEQ: { 1: { att: { heads: 3, desc: 'mem[a], mem[b], mem[c]' }, ffn: { rows: '2N', desc: 'buf_a → scr_sub' } } },
+  ADD:    { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: '4N+1', desc: 'negate buf_c' } } },
+  SUB:    { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: '2N', desc: 'copy buf_c' } } },
+  MOV:    { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: '2N', desc: 'buf_c → scr_min' } } },
+  INC:    { 1: { att: { heads: 2, desc: 'addr_b only' }, ffn: { rows: 'N', desc: 'scr_sub = −1' } } },
+  DEC:    { 1: { att: { heads: 2, desc: 'addr_b only' }, ffn: { rows: 'N', desc: 'scr_sub = +1' } } },
+  AND:    { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: 'N', desc: 'bit correction' } } },
+  OR:     { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: 'N', desc: 'bit correction' } } },
+  XOR:    { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: '2N', desc: 'bit correction' } } },
+  SHL:    { 1: { att: { heads: 2, desc: 'addr_b only' }, ffn: { rows: '2N', desc: 'shift delta' } } },
+  SHR:    { 1: { att: { heads: 2, desc: 'addr_b only' }, ffn: { rows: '2N−1', desc: 'shift delta' } } },
+  LOAD:   { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: 'N+logn', desc: 'ptr → load_temp' } },
+            2: { att: { heads: 1, desc: 'load_temp → mem[ptr]' }, ffn: { rows: '12N', desc: 'snap' } } },
+  FIND:   { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: 'N', desc: 'buf_c → find_temp' } },
+            2: { att: { heads: 1, desc: 'find_temp → tag match' }, ffn: { rows: '12N', desc: 'snap' } } },
+  CMOV:   { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: '2N−1', desc: '3-way gate' } } },
+  MULACC: { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: '5N', desc: 'SHL + cond negate' } } },
+  STORE:  { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: '4N+logn', desc: 'rewrite addr_b' } } },
+  SWAP:   { 1: { att: { heads: 3, desc: 'addr_b, addr_c' }, ffn: { rows: '4N+1', desc: 'cross routing' } },
+            4: { att: { heads: 2, desc: 'addr_b + addr_c write' }, ffn: { rows: '2N', desc: '2·buf − old' } } },
+  JMP:    { 1: { att: { heads: 2, desc: 'addr_b, addr_c' }, ffn: { rows: '0', desc: 'scr_sub = 0' } } },
+  JZ:     { 1: { att: { heads: 2, desc: 'addr_b, addr_c' }, ffn: { rows: '0', desc: 'scr_sub = 0' } } },
+  JNZ:    { 1: { att: { heads: 2, desc: 'addr_b, addr_c' }, ffn: { rows: '0', desc: 'scr_sub = 0' } } },
+  CMP:    { 1: { att: { heads: 2, desc: 'addr_b, addr_c' }, ffn: { rows: '0', desc: 'scr_sub = 0' } } },
+};
+
+function getMechs(op) {
+  const base = LAYER_MECHS._default.map(m => ({...m}));
+  const overrides = MECH_OVERRIDES[op];
+  if (overrides) {
+    for (const [li, mech] of Object.entries(overrides)) {
+      base[+li] = {...base[+li], ...mech};
+    }
+  }
+  return base;
+}
+
+// ── State tensor segments for the map ────────────────
+const TENSOR_SEGS = [
+  { label: 'Instr (a,b,c)', rows: 30, color: '#6366f1', range: '0-29' },
+  { label: 'Memory', rows: 8, color: '#10b981', range: '30-37' },
+  { label: 'Scratchpad', rows: 46, color: '#f59e0b', range: '38-83' },
+  { label: 'PC', rows: 10, color: '#ef4444', range: '84-93' },
+  { label: 'Pos Enc', rows: 10, color: '#8b5cf6', range: '94-103' },
+  { label: 'Buffer', rows: 42, color: '#0ea5e9', range: '104-145' },
+  { label: 'Tags', rows: 8, color: '#14b8a6', range: '146-153' },
+  { label: '▮', rows: 1, color: '#6b7280', range: '154' },
+];
+
+function buildTensorMap() {
+  const total = TENSOR_SEGS.reduce((s, seg) => s + seg.rows, 0);
+  const bar = document.getElementById('tmBar');
+  const labels = document.getElementById('tmLabels');
+
+  bar.innerHTML = TENSOR_SEGS.map(seg => {
+    const pct = (seg.rows / total * 100).toFixed(1);
+    const showLabel = seg.rows >= 6;
+    return `<div class="tm-seg" style="width:${pct}%;background:${seg.color}" title="${seg.label}: rows ${seg.range} (${seg.rows} rows)">${showLabel ? seg.label : ''}</div>`;
+  }).join('');
+
+  labels.innerHTML = TENSOR_SEGS.map(seg =>
+    `<span class="tm-label"><span class="tm-dot" style="background:${seg.color}"></span>${seg.label}: rows ${seg.range} (${seg.rows})</span>`
+  ).join('');
+}
+
+// ── Opcode instruction format info ──────────────────
+const OPCODE_NUMS = {
+  HALT:0, MOV:1, ADD:2, JMP:3, JZ:4, JNZ:5, INC:6, DEC:7,
+  SHL:8, SHR:9, CMP:10, LOAD:11, AND:12, OR:13, XOR:14, SUB:15,
+  FIND:16, SWAP:17, CMOV:18, MULACC:19,
+};
+
+function opcodeFieldDesc(op) {
+  const num = OPCODE_NUMS[op];
+  const isSUBLEQ = op === 'SUBLEQ';
+
+  const aBits = isSUBLEQ
+    ? '<strong>mem address</strong> (≥32)'
+    : `<strong>opcode ${num}</strong> = ${(num >>> 0).toString(2).padStart(5,'0')}₂`;
+
+  const bDesc = {
+    INC: 'target (increment)', DEC: 'target (decrement)',
+    SHL: 'target (shift)', SHR: 'target (shift)',
+    JMP: 'unused', JZ: 'test value', JNZ: 'test value', CMP: 'test value',
+    MOV: 'destination', ADD: 'dest (accumulator)', SUB: 'dest (accumulator)',
+    AND: 'dest & operand', OR: 'dest & operand', XOR: 'dest & operand',
+    LOAD: 'destination', FIND: 'destination',
+    CMOV: 'dest (conditional)', MULACC: 'accumulator',
+    SWAP: 'first operand', SUBLEQ: 'target (subtract into)',
+  }[op] || 'operand';
+
+  const cDesc = {
+    INC: 'unused', DEC: 'unused', SHL: 'unused', SHR: 'unused',
+    JMP: 'jump target', JZ: 'branch target', JNZ: 'branch target', CMP: 'branch target',
+    MOV: 'source', ADD: 'source', SUB: 'source',
+    AND: 'source', OR: 'source', XOR: 'source',
+    LOAD: 'pointer', FIND: 'search value',
+    CMOV: 'source (if neg)', MULACC: 'multiplier bit source',
+    SWAP: 'second operand', SUBLEQ: 'branch target',
+  }[op] || 'operand';
+
+  return { aBits, bDesc, cDesc };
+}
+
+// Group ordering for sidebar
+const OP_GROUPS = [
+  { label: 'Core',          ops: ['SUBLEQ'] },
+  { label: 'Arithmetic',    ops: ['INC', 'DEC', 'ADD', 'SUB'] },
+  { label: 'Logic',         ops: ['AND', 'OR', 'XOR'] },
+  { label: 'Shift',         ops: ['SHL', 'SHR'] },
+  { label: 'Control Flow',  ops: ['JMP', 'JZ', 'JNZ', 'CMP'] },
+  { label: 'Memory',        ops: ['MOV', 'LOAD', 'FIND'] },
+  { label: 'Advanced',      ops: ['SWAP', 'CMOV', 'MULACC'] },
+];
+
+
+// ════════════════════════════════════════════════════════
+// LAYOUT
+// ════════════════════════════════════════════════════════
+
+const MARGIN = { top: 52, bottom: 28, left: 130, right: 20 };
+const W = 940, H = 880;
+const NODE_R = 15;
+const NUM_ROWS = 9; // input row + 8 layer rows
+const ROW_H = (H - MARGIN.top - MARGIN.bottom) / (NUM_ROWS - 1);
+const COL_W = (W - MARGIN.left - MARGIN.right) / (NODES.length - 1);
+
+function nodeX(col) { return MARGIN.left + col * COL_W; }
+function nodeY(row) { return MARGIN.top + row * ROW_H; }
+
+// ════════════════════════════════════════════════════════
+// RENDERING
+// ════════════════════════════════════════════════════════
+
+let currentOp = 'INC';
+let particles = [];
+let animId = null;
+
+const svg = document.getElementById('network');
+const tooltip = document.getElementById('tooltip');
+
+function buildSidebar() {
+  const list = document.getElementById('opList');
+  OP_GROUPS.forEach(g => {
+    const grp = document.createElement('div');
+    grp.className = 'op-group';
+    grp.innerHTML = `<div class="op-group-label">${g.label}</div>`;
+    g.ops.forEach(op => {
+      const btn = document.createElement('button');
+      btn.className = 'op-btn' + (op === currentOp ? ' active' : '');
+      btn.dataset.op = op;
+      const info = OPCODES[op];
+      btn.innerHTML = `${info.label}<span class="op-desc">${info.desc}</span>`;
+      btn.onclick = () => selectOp(op);
+      grp.appendChild(btn);
+    });
+    list.appendChild(grp);
+  });
+}
+
+function selectOp(op) {
+  currentOp = op;
+  document.querySelectorAll('.op-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.op === op));
+  const info = OPCODES[op];
+  document.getElementById('opTitle').textContent = info.label;
+  document.getElementById('opDesc').textContent = info.desc + (info.code ? `  (${info.code})` : '');
+  render();
+  buildDetail();
+  resetParticles();
+}
+
+// ── Path generation ─────────────────────────────────
+function bezierPath(x1, y1, x2, y2, offset) {
+  const dy = (y2 - y1) * 0.42;
+  return `M${x1+offset},${y1} C${x1+offset},${y1+dy} ${x2+offset},${y2-dy} ${x2+offset},${y2}`;
+}
+
+function selfLoopPath(x, y1, y2) {
+  const bulge = 26;
+  return `M${x},${y1} C${x+bulge},${y1+(y2-y1)*0.3} ${x+bulge},${y2-(y2-y1)*0.3} ${x},${y2}`;
+}
+
+// ── Node activity ───────────────────────────────────
+function isNodeActive(row, nodeId, conns) {
+  if (row > 0) {
+    const lc = conns[row - 1] || [];
+    if (lc.some(c => c.to === nodeId)) return true;
+  }
+  if (row < 8) {
+    const lc = conns[row] || [];
+    if (lc.some(c => c.from === nodeId)) return true;
+  }
+  if (row === 0 && (nodeId === 'pc' || nodeId === 'instr')) return true;
+  if (row === 8 && (nodeId === 'pc' || nodeId === 'memb')) return true;
+  return false;
+}
+
+// ── SVG rendering ───────────────────────────────────
+function render() {
+  const info = OPCODES[currentOp];
+  const conns = info.connections;
+  let html = '';
+
+  // Defs for filters and gradients
+  html += `<defs>
+    <filter id="glow-att" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feFlood flood-color="#3b82f6" flood-opacity="0.3"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-ffn" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feFlood flood-color="#8b5cf6" flood-opacity="0.3"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-copy" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feFlood flood-color="#10b981" flood-opacity="0.25"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-write" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feFlood flood-color="#0d9488" flood-opacity="0.3"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="node-shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-opacity="0.08"/>
+    </filter>
+  </defs>`;
+
+  // Layer bands (subtle alternating)
+  for (let i = 0; i < 8; i++) {
+    const y = nodeY(i) + 10;
+    const h = ROW_H - 20;
+    if (i % 2 === 0) {
+      html += `<rect x="0" y="${y}" width="${W}" height="${h}" fill="#f8fafc" rx="0"/>`;
+    }
+  }
+
+  // Layer labels with ATT/FFN badges
+  const mechs = getMechs(currentOp);
+  for (let i = 0; i < 8; i++) {
+    const y = nodeY(i) + ROW_H / 2;
+    const m = mechs[i];
+    html += `<text x="16" y="${y-12}" font-size="11" font-weight="700" fill="#3b82f6" font-family="'JetBrains Mono',monospace">L${i+1}</text>`;
+    html += `<text x="16" y="${y+2}" font-size="8.5" fill="#9ca3af" font-family="Inter,sans-serif">${LAYERS[i].short}</text>`;
+    // ATT badge
+    let badgeY = y + 14;
+    if (m.att) {
+      html += `<g style="cursor:help"><title>${m.att.heads}-head attention: ${m.att.desc}</title>`;
+      html += `<rect x="14" y="${badgeY-8}" width="36" height="14" rx="3" fill="#dbeafe"/>`;
+      html += `<text x="32" y="${badgeY+1}" text-anchor="middle" font-size="7.5" font-weight="700" fill="#1d4ed8" font-family="Inter,sans-serif">${m.att.heads}H ATT</text>`;
+      html += `</g>`;
+      badgeY += 16;
+    }
+    // FFN badge
+    if (m.ffn) {
+      html += `<g style="cursor:help"><title>FFN: ${m.ffn.rows} rows — ${m.ffn.desc}</title>`;
+      html += `<rect x="14" y="${badgeY-8}" width="36" height="14" rx="3" fill="#ede9fe"/>`;
+      html += `<text x="32" y="${badgeY+1}" text-anchor="middle" font-size="7.5" font-weight="700" fill="#6d28d9" font-family="Inter,sans-serif">FFN</text>`;
+      html += `</g>`;
+    }
+    if (!m.att && !m.ffn) {
+      html += `<rect x="14" y="${badgeY-8}" width="36" height="14" rx="3" fill="#f3f4f6"/>`;
+      html += `<text x="32" y="${badgeY+1}" text-anchor="middle" font-size="7.5" font-weight="600" fill="#9ca3af" font-family="Inter,sans-serif">—</text>`;
+    }
+  }
+
+  // Column headers
+  NODES.forEach((n, ci) => {
+    const x = nodeX(ci);
+    html += `<text x="${x}" y="${MARGIN.top - 26}" text-anchor="middle" font-size="11" font-weight="600" fill="${n.color}" font-family="'JetBrains Mono',monospace">${n.label}</text>`;
+  });
+
+  // Draw connections
+  for (let li = 0; li < 8; li++) {
+    const layerConns = conns[li] || [];
+    layerConns.forEach((c, ci) => {
+      const fi = NI[c.from], ti = NI[c.to];
+      const x1 = nodeX(fi), y1 = nodeY(li);
+      const x2 = nodeX(ti), y2 = nodeY(li + 1);
+      const meta = TYPE_META[c.type] || TYPE_META.ffn;
+      const id = `conn-${li}-${ci}`;
+
+      let d;
+      if (fi === ti) {
+        d = selfLoopPath(x1, y1 + NODE_R, y2 - NODE_R);
+      } else {
+        const overlap = layerConns.filter((cc, cci) => cci < ci &&
+          NI[cc.from] === fi && NI[cc.to] === ti).length;
+        d = bezierPath(x1, y1 + NODE_R, x2, y2 - NODE_R, overlap * 7);
+      }
+
+      // Glow backdrop
+      html += `<path d="${d}" fill="none" stroke="${meta.color}" stroke-width="6" stroke-opacity="0.06" stroke-linecap="round"/>`;
+      // Main path
+      html += `<path id="${id}" d="${d}" fill="none" stroke="${meta.color}" stroke-width="${meta.width}" stroke-opacity="0.55" stroke-linecap="round" class="conn-path" data-layer="${li}" data-ci="${ci}" style="cursor:pointer;transition:stroke-width 0.15s,stroke-opacity 0.15s"/>`;
+      // Arrowhead
+      html += buildArrow(d, meta.color);
+    });
+  }
+
+  // Draw nodes
+  for (let ri = 0; ri < NUM_ROWS; ri++) {
+    NODES.forEach((n, ci) => {
+      const x = nodeX(ci);
+      const y = nodeY(ri);
+      const active = isNodeActive(ri, n.id, conns);
+      const opacity = active ? 1.0 : 0.15;
+      const r = active ? NODE_R : NODE_R - 4;
+
+      if (active) {
+        html += `<circle cx="${x}" cy="${y}" r="${r+1}" fill="${n.color}" opacity="0.08"/>`;
+        html += `<circle cx="${x}" cy="${y}" r="${r}" fill="white" stroke="${n.color}" stroke-width="2.5" opacity="1" filter="url(#node-shadow)"/>`;
+        html += `<circle cx="${x}" cy="${y}" r="${r-5}" fill="${n.color}" opacity="0.15"/>`;
+      } else {
+        html += `<circle cx="${x}" cy="${y}" r="${r}" fill="white" stroke="#d1d5db" stroke-width="1" opacity="${opacity}"/>`;
+      }
+    });
+  }
+
+  html += '<g id="particleLayer"></g>';
+  svg.innerHTML = html;
+
+  // Attach hover events
+  svg.querySelectorAll('.conn-path').forEach(el => {
+    el.addEventListener('mouseenter', (e) => {
+      const li = +el.dataset.layer, ci = +el.dataset.ci;
+      const c = conns[li][ci];
+      showTooltip(e, c, li);
+      el.setAttribute('stroke-width', '4.5');
+      el.setAttribute('stroke-opacity', '1');
+      el.setAttribute('filter', `url(#glow-${c.type})`);
+      highlightDetailLayer(li);
+    });
+    el.addEventListener('mousemove', moveTooltip);
+    el.addEventListener('mouseleave', () => {
+      hideTooltip();
+      const meta = TYPE_META[conns[+el.dataset.layer][+el.dataset.ci].type];
+      el.setAttribute('stroke-width', String(meta.width));
+      el.setAttribute('stroke-opacity', '0.55');
+      el.removeAttribute('filter');
+      unhighlightDetailLayers();
+    });
+  });
+
+  // Node tooltips
+  for (let ri = 0; ri < NUM_ROWS; ri++) {
+    NODES.forEach((n, ci) => {
+      if (!isNodeActive(ri, n.id, conns)) return;
+      const x = nodeX(ci), y = nodeY(ri), r = NODE_R;
+      // Invisible larger hit target
+      const hitTarget = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      hitTarget.setAttribute('cx', x);
+      hitTarget.setAttribute('cy', y);
+      hitTarget.setAttribute('r', r + 4);
+      hitTarget.setAttribute('fill', 'transparent');
+      hitTarget.setAttribute('cursor', 'pointer');
+      hitTarget.addEventListener('mouseenter', (e) => {
+        tooltip.innerHTML = `<div class="tt-title">${n.label}</div><div style="font-size:11px;opacity:0.85;white-space:pre-line">${n.desc}</div>`;
+        tooltip.classList.add('visible');
+        moveTooltip(e);
+      });
+      hitTarget.addEventListener('mousemove', moveTooltip);
+      hitTarget.addEventListener('mouseleave', hideTooltip);
+      svg.appendChild(hitTarget);
+    });
+  }
+}
+
+function buildArrow(pathD, color) {
+  const nums = pathD.match(/-?[\d.]+/g);
+  if (!nums || nums.length < 8) return '';
+  const end = [+nums[6], +nums[7]];
+  const prev = [+nums[4], +nums[5]];
+  const dx = end[0] - prev[0], dy = end[1] - prev[1];
+  const angle = Math.atan2(dy, dx);
+  const size = 6.5;
+  const x = end[0], y = end[1];
+  const x1 = x - size * Math.cos(angle - 0.38);
+  const y1 = y - size * Math.sin(angle - 0.38);
+  const x2 = x - size * Math.cos(angle + 0.38);
+  const y2 = y - size * Math.sin(angle + 0.38);
+  return `<polygon points="${x},${y} ${x1},${y1} ${x2},${y2}" fill="${color}" opacity="0.5"/>`;
+}
+
+// ── Tooltip ─────────────────────────────────────────
+function showTooltip(e, conn, layerIdx) {
+  const typeLabel = conn.type.charAt(0).toUpperCase() + conn.type.slice(1);
+  tooltip.innerHTML =
+    `<span class="tt-type ${conn.type}">${typeLabel}</span>` +
+    `<div class="tt-title">L${layerIdx+1}: ${conn.label}</div>` +
+    (conn.detail ? `<div style="margin-top:5px;font-size:11px;opacity:0.85;line-height:1.5">${conn.detail}</div>` : '');
+  tooltip.classList.add('visible');
+  moveTooltip(e);
+}
+
+function moveTooltip(e) {
+  let x = e.clientX + 14, y = e.clientY - 8;
+  if (x + 330 > window.innerWidth) x = e.clientX - 330;
+  if (y + tooltip.offsetHeight > window.innerHeight) y = window.innerHeight - tooltip.offsetHeight - 8;
+  if (y < 4) y = 4;
+  tooltip.style.left = x + 'px';
+  tooltip.style.top = y + 'px';
+}
+
+function hideTooltip() { tooltip.classList.remove('visible'); }
+
+// ── Detail Panel ────────────────────────────────────
+function buildDetail() {
+  const info = OPCODES[currentOp];
+  const mechs = getMechs(currentOp);
+  const fld = opcodeFieldDesc(currentOp);
+
+  // Instruction format card
+  let html = `<div class="instr-format">
+    <div class="if-title">Instruction Format</div>
+    <div class="if-fields">
+      <div class="if-field f-a">a: ${fld.aBits}</div>
+      <div class="if-field f-b">b: ${fld.bDesc}</div>
+      <div class="if-field f-c">c: ${fld.cDesc}</div>
+    </div>
+    <div class="if-desc">
+      Each field is <strong>logn = 10 bits</strong> in bipolar encoding (±1, MSB-first).
+      ${currentOp === 'SUBLEQ'
+        ? 'When addr_a ≥ 32 (bit 5 = +1), the instruction is SUBLEQ. Otherwise it\'s an extended opcode 0-19.'
+        : `Opcode ${OPCODE_NUMS[currentOp]} is encoded in addr_a. Bits 5-9 are all −1 (< 32), signaling extended mode.`}
+    </div>
+  </div>`;
+
+  // Layer cards with mechanism badges
+  html += LAYERS.map((l, i) => {
+    const desc = info.layerDescs ? info.layerDescs[i] : '';
+    const m = mechs[i];
+    let badges = '';
+    if (m.att) badges += `<span class="layer-badge att">${m.att.heads}H ATT: ${m.att.desc}</span> `;
+    if (m.ffn) badges += `<span class="layer-badge ffn">FFN ${m.ffn.rows}: ${m.ffn.desc}</span>`;
+    if (!m.att && !m.ffn) badges += `<span class="layer-badge none">—</span>`;
+
+    return `<div class="detail-layer" data-layer="${i}">
+      <div class="dl-head">
+        <div class="dl-num">${i+1}</div>
+        <div class="dl-name">${l.name}</div>
+      </div>
+      <div style="margin-bottom:4px">${badges}</div>
+      <div class="dl-desc">${desc}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('detailLayers').innerHTML = html;
+}
+
+function highlightDetailLayer(li) {
+  document.querySelectorAll('.detail-layer').forEach((el, i) => {
+    el.classList.toggle('highlight', i === li);
+    if (i === li) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+}
+
+function unhighlightDetailLayers() {
+  document.querySelectorAll('.detail-layer').forEach(el => el.classList.remove('highlight'));
+}
+
+// ════════════════════════════════════════════════════════
+// PARTICLE ANIMATION
+// ════════════════════════════════════════════════════════
+
+function resetParticles() {
+  particles = [];
+  const info = OPCODES[currentOp];
+  const conns = info.connections;
+
+  for (let li = 0; li < 8; li++) {
+    const layerConns = conns[li] || [];
+    layerConns.forEach((c, ci) => {
+      const n = 3;
+      for (let p = 0; p < n; p++) {
+        particles.push({
+          layer: li, ci,
+          phase: p / n + Math.random() * 0.1,
+          speed: 0.003 + Math.random() * 0.002,
+          color: TYPE_META[c.type]?.color || '#94a3b8',
+        });
+      }
+    });
+  }
+}
+
+function bezierPoint(t, p0, p1, p2, p3) {
+  const u = 1 - t;
+  return {
+    x: u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
+    y: u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y,
+  };
+}
+
+function parsePath(pathEl) {
+  if (!pathEl) return null;
+  const nums = pathEl.getAttribute('d').match(/-?[\d.]+/g);
+  if (!nums || nums.length < 8) return null;
+  return {
+    p0: { x: +nums[0], y: +nums[1] },
+    p1: { x: +nums[2], y: +nums[3] },
+    p2: { x: +nums[4], y: +nums[5] },
+    p3: { x: +nums[6], y: +nums[7] },
+  };
+}
+
+function animate() {
+  const layer = document.getElementById('particleLayer');
+  if (!layer) { animId = requestAnimationFrame(animate); return; }
+
+  let html = '';
+  particles.forEach(p => {
+    p.phase += p.speed;
+    if (p.phase > 1) p.phase -= 1;
+
+    const pathEl = document.getElementById(`conn-${p.layer}-${p.ci}`);
+    const pts = parsePath(pathEl);
+    if (!pts) return;
+
+    const pos = bezierPoint(p.phase, pts.p0, pts.p1, pts.p2, pts.p3);
+    const alpha = Math.sin(p.phase * Math.PI);
+    const r = 2.5 + alpha * 1.5;
+    html += `<circle cx="${pos.x}" cy="${pos.y}" r="${r}" fill="${p.color}" opacity="${alpha * 0.6}"/>`;
+    // Small trailing glow
+    if (alpha > 0.3) {
+      html += `<circle cx="${pos.x}" cy="${pos.y}" r="${r + 2}" fill="${p.color}" opacity="${alpha * 0.12}"/>`;
+    }
+  });
+
+  layer.innerHTML = html;
+  animId = requestAnimationFrame(animate);
+}
+
+// ── Keyboard navigation ─────────────────────────────
+document.addEventListener('keydown', (e) => {
+  const allOps = OP_GROUPS.flatMap(g => g.ops);
+  const idx = allOps.indexOf(currentOp);
+  if (e.key === 'ArrowDown' || e.key === 'j') {
+    e.preventDefault();
+    if (idx < allOps.length - 1) selectOp(allOps[idx + 1]);
+  } else if (e.key === 'ArrowUp' || e.key === 'k') {
+    e.preventDefault();
+    if (idx > 0) selectOp(allOps[idx - 1]);
+  }
+});
+
+// ════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════
+
+buildSidebar();
+buildTensorMap();
+render();
+buildDetail();
+resetParticles();
+animate();
+
+</script>
+</body>
+</html>

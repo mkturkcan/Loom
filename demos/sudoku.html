@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sudoku Solver — Loom</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <link rel="stylesheet" href="common.css">
+    <script src="c_compiler.js"></script>
+    <script src="isa_interpreter.js"></script>
+    <style>
+        .sudoku-grid {
+            display: grid;
+            grid-template-columns: repeat(9, minmax(28px, 42px));
+            grid-template-rows: repeat(9, minmax(28px, 42px));
+            max-width: 100%;
+            gap: 1px;
+            justify-content: center;
+            margin: 16px auto;
+            background: #d1d5db;
+            border: 2px solid #374151;
+            border-radius: 4px;
+        }
+        .sudoku-cell {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.1rem;
+            font-weight: 700;
+            transition: all 0.15s ease;
+        }
+        .sudoku-cell.fixed { background: #e5e7eb; color: #111827; }
+        .sudoku-cell.empty { background: #fff; color: #9ca3af; }
+        .sudoku-cell.solved { background: #eef2ff; color: #4f46e5; }
+        .sudoku-cell.trying { background: #fef3c7; color: #92400e; }
+        .sudoku-cell.backtrack { background: #fee2e2; color: #991b1b; }
+        .sudoku-cell.box-right { border-right: 2px solid #374151; }
+        .sudoku-cell.box-bottom { border-bottom: 2px solid #374151; }
+
+        .controls {
+            display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+            padding: 12px 16px; background: #fff; border: 1px solid #e5e7eb;
+            border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .controls select, .controls button {
+            font-family: inherit; font-size: 0.8rem; padding: 8px 12px;
+            border-radius: 8px; border: 1px solid #d1d5db; cursor: pointer;
+        }
+        .mode-btn {
+            font-weight: 600; color: #fff; border: none;
+            transition: background 0.15s;
+        }
+        .mode-btn.isa { background: #10b981; }
+        .mode-btn.onnx { background: #3b82f6; }
+        .btn-solve { background: #6366f1; color: #fff; font-weight: 600; border-color: #6366f1; }
+        .btn-solve:hover { background: #4f46e5; }
+        .btn-reset { background: #fff; color: #374151; }
+
+        .stats {
+            display: flex; gap: 16px; padding: 10px 16px;
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+            font-size: 0.75rem; color: #6b7280;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .stats strong { color: #374151; }
+
+        .legend {
+            display: flex; gap: 16px; justify-content: center;
+            padding: 8px; font-size: 0.7rem; color: #6b7280;
+        }
+        .legend-item { display: flex; align-items: center; gap: 4px; }
+        .legend-swatch { width: 12px; height: 12px; border-radius: 2px; }
+
+        .code-body { max-height: 300px; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="index.html">Loom Sudoku</a></h1>
+        <p class="subtitle">
+            9x9 Sudoku solved by the 146x512 transformer (8.8 MB model).
+            Same C source, compiled in-browser to 284 ISA instructions.
+        </p>
+    </header>
+
+    <div class="page-layout">
+        <div class="network-panel" id="networkPanel"></div>
+
+        <div class="main-panel">
+            <div class="controls">
+                <button class="mode-btn isa" id="modeBtn">ISA Interpreter</button>
+                <button class="btn-solve" id="btnSolve">Solve</button>
+                <button class="btn-reset" id="btnReset">Reset</button>
+                <select id="puzzleSelect">
+                    <option value="0">Classic: 30 givens</option>
+                    <option value="1">Medium: 27 givens</option>
+                    <option value="2">Hard: 26 givens</option>
+                </select>
+                <div style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:0.7rem;color:#9ca3af">
+                    <label>Speed</label>
+                    <input type="range" id="speedSlider" min="1" max="100" value="80" style="width:80px;accent-color:#6366f1">
+                </div>
+            </div>
+
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Loading...</span>
+            </div>
+
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04)">
+                <div style="display:flex;justify-content:center">
+                    <div class="sudoku-grid" id="sudokuGrid"></div>
+                </div>
+                <div class="legend">
+                    <div class="legend-item"><div class="legend-swatch" style="background:#e5e7eb"></div> Given</div>
+                    <div class="legend-item"><div class="legend-swatch" style="background:#eef2ff"></div> Solved</div>
+                    <div class="legend-item"><div class="legend-swatch" style="background:#fef3c7"></div> Trying</div>
+                    <div class="legend-item"><div class="legend-swatch" style="background:#fee2e2"></div> Backtrack</div>
+                </div>
+            </div>
+
+            <div class="stats">
+                <span>Steps: <strong id="execSteps">0</strong></span>
+                <span>Cells: <strong id="execPlacements">0</strong></span>
+                <span>Backtracks: <strong id="execBacktracks">0</strong></span>
+                <span>Status: <strong id="execStatus">Ready</strong></span>
+            </div>
+
+            <div class="code-panel">
+                <div class="code-header">
+                    <span class="code-header-title">Sudoku Solver: C Source</span>
+                    <span style="font-size:0.7rem;color:#9ca3af" id="instrCount"></span>
+                </div>
+                <div class="code-body" id="codeBody"></div>
+            </div>
+
+            <div class="info-panel">
+                <h3>How It Works</h3>
+                <p>
+                    The C source is compiled in-browser to <strong id="instrCountDesc">0</strong> ISA
+                    instructions using the STORE opcode for indirect writes.
+                    Two engines: <strong>ISA Interpreter</strong> executes instructions directly;
+                    <strong>ONNX Transformer</strong> runs each instruction as a 146x512 neural
+                    network forward pass via WebGPU/WASM. Both produce identical results.
+                </p>
+                <p>
+                    The solver uses iterative backtracking: tries values 1-9 at each empty cell,
+                    checking row, column, and 3x3 box constraints. Fixed cells are stored as
+                    negative values. Config: d_model=146, n=512, 8 layers, 8.8 MB ONNX model.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script src="common.js"></script>
+    <script>
+    (async function() {
+        const GRID_SIZE = 81;
+
+        const PUZZLES = [
+            { name: 'Classic', grid: [
+                -5,-3, 0, 0,-7, 0, 0, 0, 0,
+                -6, 0, 0,-1,-9,-5, 0, 0, 0,
+                 0,-9,-8, 0, 0, 0, 0,-6, 0,
+                -8, 0, 0, 0,-6, 0, 0, 0,-3,
+                -4, 0, 0,-8, 0,-3, 0, 0,-1,
+                -7, 0, 0, 0,-2, 0, 0, 0,-6,
+                 0,-6, 0, 0, 0, 0,-2,-8, 0,
+                 0, 0, 0,-4,-1,-9, 0, 0,-5,
+                 0, 0, 0, 0,-8, 0, 0,-7,-9,
+            ]},
+            { name: 'Medium', grid: [
+                -4, 0, 0, 0, 0,-2, 0,-3, 0,
+                 0, 0,-3,-4,-6, 0, 0, 0, 0,
+                -6,-1,-2, 0, 0, 0, 0, 0, 0,
+                -1, 0,-4, 0, 0, 0,-7, 0,-5,
+                 0, 0, 0, 0,-1, 0, 0,-2,-6,
+                -7,-8, 0,-5, 0, 0, 0, 0, 0,
+                -2, 0, 0, 0, 0, 0, 0, 0, 0,
+                -8, 0,-5,-6, 0, 0, 0, 0, 0,
+                 0, 0, 0,-2, 0,-3, 0,-1,-4,
+            ]},
+            { name: 'Hard', grid: [
+                -1,-4, 0, 0, 0, 0,-7, 0, 0,
+                 0, 0, 0,-1, 0,-8, 0, 0, 0,
+                 0,-8,-7, 0,-4, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0,-1,-9,-7, 0,
+                 0, 0, 0, 0,-6, 0, 0,-5, 0,
+                 0, 0, 0,-3, 0, 0, 0, 0,-1,
+                 0,-3, 0, 0,-2,-6, 0,-8, 0,
+                 0, 0,-2,-7,-5, 0, 0,-4, 0,
+                 0,-7,-5, 0, 0, 0,-6, 0, 0,
+            ]},
+        ];
+
+        let config = null, state = null, initialState = null;
+        let running = false, totalSteps = 0, placements = 0, backtracks = 0;
+        let currentPuzzle = 0, useISA = true;
+        let isaInterpreter = null, compileResult = null, programInfo = null;
+
+        const btnSolve = document.getElementById('btnSolve');
+        const btnReset = document.getElementById('btnReset');
+        const puzzleSelect = document.getElementById('puzzleSelect');
+        const speedSlider = document.getElementById('speedSlider');
+        const gridEl = document.getElementById('sudokuGrid');
+
+        document.getElementById('networkPanel').innerHTML = buildNetworkPanelHTML();
+
+        const SOLVER_SOURCE = `int main() {
+    int grid[81];
+    int pos; int val; int ok; int found;
+    int row; int col; int rs; int bs;
+    int idx; int g; int done; int i;
+    int br; int bc; int br2; int bc2;
+    int temp;
+
+    pos = 0; found = 0;
+    while (pos < 81 && found == 0) {
+        if (grid[pos] == 0) { found = 1; }
+        else { pos = pos + 1; }
+    }
+
+    done = 0;
+    while (done == 0) {
+        if (pos > 80) { done = 1; }
+        else if (pos < 0) { done = 2; }
+        else {
+            val = grid[pos] + 1; found = 0;
+            while (val < 10 && found == 0) {
+                ok = 1;
+                row = 0; temp = pos;
+                while (temp >= 9) { temp = temp - 9; row = row + 1; }
+                col = temp;
+
+                rs = (row << 3) + row;
+                idx = rs; i = 0;
+                while (i < 9) {
+                    if (idx != pos) {
+                        g = grid[idx]; if (g < 0) { g = -g; }
+                        if (g == val) { ok = 0; }
+                    }
+                    idx = idx + 1; i = i + 1;
+                }
+
+                if (ok != 0) {
+                    idx = col; i = 0;
+                    while (i < 9) {
+                        if (idx != pos) {
+                            g = grid[idx]; if (g < 0) { g = -g; }
+                            if (g == val) { ok = 0; }
+                        }
+                        idx = idx + 9; i = i + 1;
+                    }
+                }
+
+                if (ok != 0) {
+                    br = row; temp = br;
+                    while (temp >= 3) { temp = temp - 3; }
+                    br = br - temp;
+                    bc = col; temp = bc;
+                    while (temp >= 3) { temp = temp - 3; }
+                    bc = bc - temp;
+                    bs = (br << 3) + br + bc;
+                    idx = bs; br2 = 0;
+                    while (br2 < 3) {
+                        bc2 = 0;
+                        while (bc2 < 3) {
+                            if (idx != pos) {
+                                g = grid[idx]; if (g < 0) { g = -g; }
+                                if (g == val) { ok = 0; }
+                            }
+                            idx = idx + 1; bc2 = bc2 + 1;
+                        }
+                        idx = idx + 6; br2 = br2 + 1;
+                    }
+                }
+
+                if (ok != 0) { found = 1; }
+                else { val = val + 1; }
+            }
+
+            if (found != 0) {
+                grid[pos] = val;
+                pos = pos + 1; found = 0;
+                while (pos < 81 && found == 0) {
+                    if (grid[pos] < 0) { pos = pos + 1; }
+                    else { found = 1; }
+                }
+            } else {
+                grid[pos] = 0;
+                pos = pos - 1; found = 0;
+                while (pos >= 0 && found == 0) {
+                    if (grid[pos] < 0) { pos = pos - 1; }
+                    else { found = 1; }
+                }
+            }
+        }
+    }
+    return done;
+}`;
+
+        buildCodeView(SOLVER_SOURCE, 'codeBody');
+
+        function getGridValues() {
+            if (useISA && isaInterpreter) {
+                const gridAddr = compileResult.meta.variables['grid'];
+                const values = [];
+                for (let i = 0; i < GRID_SIZE; i++) values.push(isaInterpreter.readVar(gridAddr + i));
+                return values;
+            }
+            if (!state || !config || !programInfo) return new Array(GRID_SIZE).fill(0);
+            const gridAddr = programInfo.variables['grid'];
+            const values = [];
+            for (let i = 0; i < GRID_SIZE; i++) values.push(readMemory(state, config, gridAddr + i));
+            return values;
+        }
+
+        function getPosVal() {
+            if (useISA && isaInterpreter) {
+                const vars = compileResult.meta.variables;
+                return { pos: isaInterpreter.readVar(vars['pos']), done: isaInterpreter.readVar(vars['done']) };
+            }
+            if (!state || !config || !programInfo) return { pos: -1, done: 0 };
+            const vars = programInfo.variables;
+            return { pos: readMemory(state, config, vars['pos']), done: readMemory(state, config, vars['done']) };
+        }
+
+        function renderGrid(values, highlight) {
+            gridEl.innerHTML = '';
+            const puzzle = PUZZLES[currentPuzzle].grid;
+            for (let i = 0; i < GRID_SIZE; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'sudoku-cell';
+                const raw = values[i];
+                const isFixed = puzzle[i] < 0;
+                const displayVal = raw < 0 ? -raw : raw;
+                const r = Math.floor(i / 9), c = i % 9;
+                if (c === 2 || c === 5) cell.classList.add('box-right');
+                if (r === 2 || r === 5) cell.classList.add('box-bottom');
+                if (isFixed) {
+                    cell.classList.add('fixed');
+                    cell.textContent = displayVal || '';
+                } else if (highlight && highlight.type === 'trying' && highlight.pos === i) {
+                    cell.classList.add('trying');
+                    cell.textContent = displayVal || '';
+                } else if (highlight && highlight.type === 'backtrack' && highlight.pos === i) {
+                    cell.classList.add('backtrack');
+                    cell.textContent = '';
+                } else if (displayVal > 0) {
+                    cell.classList.add('solved');
+                    cell.textContent = displayVal;
+                } else {
+                    cell.classList.add('empty');
+                    cell.textContent = '';
+                }
+                gridEl.appendChild(cell);
+            }
+        }
+
+        function loadPuzzle(idx) {
+            currentPuzzle = idx;
+            const puzzle = PUZZLES[idx].grid;
+            if (useISA && compileResult) {
+                isaInterpreter = createInterpreter(compileResult);
+                const gridAddr = compileResult.meta.variables['grid'];
+                for (let i = 0; i < GRID_SIZE; i++) isaInterpreter.writeVar(gridAddr + i, puzzle[i]);
+            }
+            if (initialState && config) {
+                state = copyState(initialState);
+                _currentState = state;
+                const gridAddr = (programInfo || compileResult.meta).variables['grid'];
+                for (let i = 0; i < GRID_SIZE; i++) writeMemory(state, config, gridAddr + i, puzzle[i]);
+            }
+            totalSteps = 0; placements = 0; backtracks = 0;
+            renderGrid(puzzle, null);
+            if (state && config) renderHeatmap(document.getElementById('stateCanvas'), state, config);
+            updateStats();
+        }
+
+        function updateStats() {
+            document.getElementById('execSteps').textContent = totalSteps;
+            document.getElementById('execPlacements').textContent = placements;
+            document.getElementById('execBacktracks').textContent = backtracks;
+        }
+
+        async function runSolve() {
+            if (running) { running = false; btnSolve.textContent = 'Solve'; setStatus('ready', 'Paused'); return; }
+            running = true;
+            btnSolve.textContent = 'Pause';
+            const modeLabel = useISA ? 'ISA' : 'ONNX';
+            setStatus('running', `Solving (${modeLabel})...`);
+
+            const t0 = performance.now();
+            let prevGrid = getGridValues().slice();
+            let batchSize = 200;
+
+            while (running) {
+                let result;
+                if (useISA && isaInterpreter) {
+                    const r = isaInterpreter.run(batchSize);
+                    result = { steps: r.steps, halted: r.halted };
+                } else {
+                    result = await runUntilStopFast(state, config, batchSize);
+                    state = result.state; _currentState = state;
+                }
+                totalSteps += result.steps;
+
+                if (result.halted) {
+                    running = false; btnSolve.textContent = 'Solve';
+                    const { done } = getPosVal();
+                    setStatus(done === 1 ? 'done' : 'error', done === 1 ? `Solved! (${modeLabel})` : 'No solution');
+                    document.getElementById('execStatus').textContent = done === 1 ? 'Solved' : 'No solution';
+                    renderGrid(getGridValues(), null);
+                    break;
+                }
+
+                const values = getGridValues();
+                let highlight = null;
+                for (let ci = 0; ci < GRID_SIZE; ci++) {
+                    const cur = values[ci] > 0 ? values[ci] : 0;
+                    const prev = prevGrid[ci] > 0 ? prevGrid[ci] : 0;
+                    if (cur > 0 && prev === 0) { highlight = { type: 'trying', pos: ci }; placements++; }
+                    else if (cur === 0 && prev > 0) { highlight = { type: 'backtrack', pos: ci }; backtracks++; if (placements > 0) placements--; }
+                }
+                renderGrid(values, highlight);
+                updateStats();
+                prevGrid = values.slice();
+
+                const speed = parseInt(speedSlider.value);
+                batchSize = useISA ? (speed > 90 ? 50000 : speed > 50 ? 10000 : 2000) : (speed > 90 ? 2000 : speed > 50 ? 500 : 100);
+                const delay = Math.max(0, 101 - speed);
+                await new Promise(r => setTimeout(r, delay));
+            }
+
+            const elapsed = performance.now() - t0;
+            updateStat('statSteps', totalSteps);
+            updateStat('statTotal', totalSteps);
+            if (totalSteps > 0) updateStat('statMs', (elapsed / totalSteps).toFixed(2));
+            clearLayerAnimation();
+        }
+
+        function doReset() {
+            running = false; btnSolve.textContent = 'Solve';
+            loadPuzzle(currentPuzzle);
+            document.getElementById('execStatus').textContent = 'Ready';
+            setStatus('ready', 'Ready'); clearLayerAnimation();
+        }
+
+        btnSolve.addEventListener('click', runSolve);
+        btnReset.addEventListener('click', doReset);
+        puzzleSelect.addEventListener('change', () => { running = false; btnSolve.textContent = 'Solve'; loadPuzzle(parseInt(puzzleSelect.value)); setStatus('ready', 'Ready'); });
+        document.getElementById('modeBtn').addEventListener('click', function() {
+            useISA = !useISA;
+            if (useISA) {
+                this.textContent = 'ISA Interpreter';
+                this.className = 'mode-btn isa';
+                updateStat('statBackend', 'ISA');
+            } else {
+                this.textContent = 'ONNX Transformer';
+                this.className = 'mode-btn onnx';
+                updateStat('statBackend', 'ONNX');
+                if (isaInterpreter && state && config) isaInterpreter.syncToState(state, config);
+            }
+            doReset();
+        });
+
+        // Init
+        setStatus('loading', 'Compiling C source and loading model...');
+        try {
+            const sudokuConfig = { s: 32, m: 160, n: 512, N: 8 };
+            compileResult = compileC(SOLVER_SOURCE, sudokuConfig.s, sudokuConfig.m, sudokuConfig.n, sudokuConfig.N);
+            config = compileResult.config;
+            _currentConfig = config;
+
+            const numInstr = compileResult.commands.length;
+            document.getElementById('instrCount').textContent = `${numInstr} instructions`;
+            document.getElementById('instrCountDesc').textContent = numInstr;
+
+            isaInterpreter = createInterpreter(compileResult);
+
+            const backend = await loadONNXModel('programs/argmax_146x512.onnx');
+            updateStat('statBackend', useISA ? 'ISA' : backend);
+
+            initialState = buildStateTensor(compileResult);
+            state = copyState(initialState);
+            _currentState = state;
+
+            // Use compile result for variable names
+            programInfo = compileResult.meta;
+
+            loadPuzzle(0);
+            setStatus('ready', 'Ready. Press Solve');
+        } catch (err) {
+            console.error('Init error:', err);
+            setStatus('error', 'Error: ' + err.message);
+        }
+    })();
+    </script>
+</body>
+</html>

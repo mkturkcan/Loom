@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Engine Benchmark — Loom</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <link rel="stylesheet" href="common.css">
+    <script src="c_compiler.js"></script>
+    <script src="isa_interpreter.js"></script>
+    <script src="sparse_argmax.js"></script>
+    <style>
+        .bench-results { margin-top: 16px; }
+        .bench-row {
+            display: flex; gap: 12px; align-items: center;
+            padding: 12px 16px; background: #fff; border: 1px solid #e5e7eb;
+            border-radius: 10px; margin-bottom: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .bench-label { font-weight: 700; font-size: 0.85rem; width: min(140px, 30%); flex-shrink: 0; }
+        .bench-bar-wrap { flex: 1; height: 28px; background: #f3f4f6; border-radius: 6px; overflow: hidden; position: relative; }
+        .bench-bar { height: 100%; border-radius: 6px; transition: width 0.5s ease; min-width: 2px; }
+        .bench-value {
+            position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+            font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; font-weight: 600;
+        }
+        .bench-status { font-size: 0.75rem; color: #6b7280; width: 100px; text-align: right; }
+        .controls {
+            display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+            padding: 12px 16px; background: #fff; border: 1px solid #e5e7eb;
+            border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .controls button {
+            font-family: inherit; font-size: 0.85rem; padding: 10px 20px;
+            border-radius: 8px; border: 1px solid #6366f1; background: #6366f1;
+            color: #fff; font-weight: 600; cursor: pointer;
+        }
+        .controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .controls select {
+            font-family: inherit; font-size: 0.8rem; padding: 8px 12px;
+            border-radius: 8px; border: 1px solid #d1d5db; cursor: pointer;
+        }
+        .result-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.8rem; }
+        .result-table th { text-align: left; padding: 8px; background: #f9fafb; color: #6b7280; font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid #e5e7eb; }
+        .result-table td { padding: 8px; border-bottom: 1px solid #f3f4f6; }
+        .result-table td:nth-child(n+2) { font-family: 'JetBrains Mono', monospace; text-align: right; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="index.html">Loom Engine Benchmark</a></h1>
+        <p class="subtitle">
+            Compare execution speed of three backends: ISA interpreter (direct bytecode),
+            Sparse Argmax (CPU, 8K nonzero weights), and ONNX Runtime (dense WebGPU/WASM).
+        </p>
+    </header>
+
+    <div style="max-width:720px;margin:0 auto">
+        <div class="controls">
+            <button id="btnRun">Run Benchmark</button>
+            <select id="progSelect">
+                <option value="inc100">INC x100 (100 steps)</option>
+                <option value="inc1000">INC x1000 (1000 steps)</option>
+                <option value="fib">Fibonacci 7 (~200 steps)</option>
+                <option value="sort">Bubble Sort 5 elements (~500 steps)</option>
+            </select>
+            <span id="compileInfo" style="font-size:0.75rem;color:#9ca3af"></span>
+        </div>
+
+        <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Loading engines...</span>
+        </div>
+
+        <div class="bench-results" id="results">
+            <div class="bench-row">
+                <div class="bench-label">ISA Interpreter</div>
+                <div class="bench-bar-wrap"><div class="bench-bar" id="barISA" style="width:0;background:#10b981"></div><div class="bench-value" id="valISA">—</div></div>
+                <div class="bench-status" id="statusISA">Ready</div>
+            </div>
+            <div class="bench-row">
+                <div class="bench-label">Sparse Argmax</div>
+                <div class="bench-bar-wrap"><div class="bench-bar" id="barSparse" style="width:0;background:#f59e0b"></div><div class="bench-value" id="valSparse">—</div></div>
+                <div class="bench-status" id="statusSparse">Ready</div>
+            </div>
+            <div class="bench-row">
+                <div class="bench-label">ONNX Runtime</div>
+                <div class="bench-bar-wrap"><div class="bench-bar" id="barONNX" style="width:0;background:#3b82f6"></div><div class="bench-value" id="valONNX">—</div></div>
+                <div class="bench-status" id="statusONNX">Ready</div>
+            </div>
+        </div>
+
+        <table class="result-table" id="resultTable" style="display:none">
+            <thead><tr><th>Engine</th><th>Steps</th><th>Time (ms)</th><th>ms/step</th><th>steps/sec</th><th>Speedup</th><th>Result</th></tr></thead>
+            <tbody id="resultBody"></tbody>
+        </table>
+    </div>
+
+    <script src="common.js"></script>
+    <script>
+    (async function() {
+        const CFG = { s: 32, m: 160, n: 512, N: 8 };
+
+        const PROGRAMS = {
+            inc100: {
+                name: 'INC x100',
+                source: `int main() { int x; int i; i = 0; while (i < 100) { x = x + 1; i = i + 1; } return x; }`,
+                check: (vars, read) => read(vars.x) === 100,
+            },
+            inc1000: {
+                name: 'INC x1000',
+                source: `int main() { int x; int i; i = 0; while (i < 1000) { x = x + 1; i = i + 1; } return x; }`,
+                check: (vars, read) => read(vars.x) === 1000,
+            },
+            fib: {
+                name: 'Fibonacci 7',
+                source: `int main() { int a; int b; int t; int n; int i; a = 0; b = 1; n = 7; i = 0; while (i < n) { t = a + b; a = b; b = t; i = i + 1; } return a; }`,
+                check: (vars, read) => read(vars.a) === 13,
+            },
+            sort: {
+                name: 'Bubble Sort 5',
+                source: `int main() { int arr[5]; int n; int i; int j; int t; arr[0] = 5; arr[1] = 3; arr[2] = 4; arr[3] = 1; arr[4] = 2; n = 5; i = 0; while (i < n) { j = 0; while (j < n - 1) { if (arr[j] > arr[j + 1]) { t = arr[j]; arr[j] = arr[j + 1]; arr[j + 1] = t; } j = j + 1; } i = i + 1; } return arr[0]; }`,
+                check: (vars, read) => read(vars.arr) === 1,
+            },
+        };
+
+        let sparseEngine = null;
+        let onnxReady = false;
+        let running = false;
+
+        const btnRun = document.getElementById('btnRun');
+
+        // Init
+        setStatus('loading', 'Loading engines...');
+
+        // Load sparse engine
+        try {
+            sparseEngine = await loadSparseArgmax('programs/sparse_weights_146x512.json', CFG.n);
+            document.getElementById('statusSparse').textContent = 'Loaded';
+        } catch (e) {
+            document.getElementById('statusSparse').textContent = 'Failed: ' + e.message;
+            console.error('Sparse load failed:', e);
+        }
+
+        // Load ONNX
+        try {
+            const backend = await loadONNXModel('programs/argmax_146x512.onnx');
+            onnxReady = true;
+            document.getElementById('statusONNX').textContent = backend;
+        } catch (e) {
+            document.getElementById('statusONNX').textContent = 'Failed';
+            console.error('ONNX load failed:', e);
+        }
+
+        setStatus('ready', 'Ready. Select a program and click Run Benchmark.');
+
+        btnRun.addEventListener('click', async () => {
+            if (running) return;
+            running = true;
+            btnRun.disabled = true;
+
+            const progId = document.getElementById('progSelect').value;
+            const prog = PROGRAMS[progId];
+
+            // Compile
+            const compiled = compileC(prog.source, CFG.s, CFG.m, CFG.n, CFG.N);
+            const cfg = compiled.config;
+            const vars = compiled.meta.variables;
+            const numInstr = compiled.commands.length;
+            document.getElementById('compileInfo').textContent = `${numInstr} instructions`;
+
+            const results = [];
+
+            // --- ISA Interpreter ---
+            setStatus('running', 'Running ISA Interpreter...');
+            document.getElementById('statusISA').textContent = 'Running...';
+            await new Promise(r => setTimeout(r, 10));
+            {
+                const interp = createInterpreter(compiled);
+                const t0 = performance.now();
+                const res = interp.run(10000000);
+                const ms = performance.now() - t0;
+                const correct = prog.check(vars, (addr) => interp.readVar(addr));
+                results.push({ name: 'ISA Interpreter', steps: res.steps, ms, correct, halted: res.halted });
+                document.getElementById('statusISA').textContent = `${ms.toFixed(1)} ms`;
+            }
+
+            // --- Sparse Argmax ---
+            if (sparseEngine) {
+                setStatus('running', 'Running Sparse Argmax...');
+                document.getElementById('statusSparse').textContent = 'Running...';
+                await new Promise(r => setTimeout(r, 10));
+                {
+                    const state = buildStateTensor(compiled);
+                    const nt = cfg.s + cfg.m + compiled.commands.length;
+                    const t0 = performance.now();
+                    const res = await sparseEngine.run(state, cfg, 10000000, 100, nt);
+                    const ms = performance.now() - t0;
+                    const correct = prog.check(vars, (addr) => readMemory(state, cfg, addr));
+                    results.push({ name: 'Sparse Argmax', steps: res.steps, ms, correct, halted: res.halted });
+                    document.getElementById('statusSparse').textContent = `${ms.toFixed(1)} ms`;
+                }
+            }
+
+            // --- ONNX ---
+            if (onnxReady) {
+                setStatus('running', 'Running ONNX Runtime...');
+                document.getElementById('statusONNX').textContent = 'Running...';
+                await new Promise(r => setTimeout(r, 10));
+                {
+                    const state = buildStateTensor(compiled);
+                    _currentConfig = cfg;
+                    const t0 = performance.now();
+                    const res = await runUntilStopFast(state, cfg, 100000);
+                    const ms = performance.now() - t0;
+                    const correct = prog.check(vars, (addr) => readMemory(res.state, cfg, addr));
+                    results.push({ name: 'ONNX Runtime', steps: res.steps, ms, correct, halted: res.halted });
+                    document.getElementById('statusONNX').textContent = `${ms.toFixed(1)} ms`;
+                }
+            }
+
+            // --- Display results ---
+            const maxMs = Math.max(...results.map(r => r.ms));
+            const minMs = Math.min(...results.map(r => r.ms));
+            const bars = { 'ISA Interpreter': 'barISA', 'Sparse Argmax': 'barSparse', 'ONNX Runtime': 'barONNX' };
+            const valEls = { 'ISA Interpreter': 'valISA', 'Sparse Argmax': 'valSparse', 'ONNX Runtime': 'valONNX' };
+
+            for (const r of results) {
+                const pct = maxMs > 0 ? Math.max(2, r.ms / maxMs * 100) : 2;
+                const barEl = document.getElementById(bars[r.name]);
+                const valEl = document.getElementById(valEls[r.name]);
+                if (barEl) barEl.style.width = pct + '%';
+                if (valEl) valEl.textContent = r.ms < 1 ? r.ms.toFixed(3) + ' ms' : r.ms.toFixed(1) + ' ms';
+            }
+
+            // Table
+            const tbody = document.getElementById('resultBody');
+            tbody.innerHTML = '';
+            for (const r of results) {
+                const msPerStep = r.steps > 0 ? (r.ms / r.steps) : 0;
+                const stepsPerSec = r.ms > 0 ? Math.round(r.steps / r.ms * 1000) : 0;
+                const speedup = minMs > 0 ? (r.ms / minMs).toFixed(1) + 'x' : '—';
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${r.name}</td><td>${r.steps.toLocaleString()}</td><td>${r.ms.toFixed(1)}</td><td>${msPerStep.toFixed(4)}</td><td>${stepsPerSec.toLocaleString()}</td><td>${r.name === results[0].name ? '1x (ref)' : speedup}</td><td>${r.correct ? '✓' : '✗'} ${r.halted ? 'halted' : 'limit'}</td>`;
+                tbody.appendChild(tr);
+            }
+            document.getElementById('resultTable').style.display = '';
+
+            setStatus('done', 'Benchmark complete.');
+            running = false;
+            btnRun.disabled = false;
+        });
+    })();
+    </script>
+</body>
+</html>

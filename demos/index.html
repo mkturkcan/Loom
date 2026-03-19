@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loom: A Scalable Computer Architecture for Looped Transformers</title>
+    <link rel="stylesheet" href="common.css">
+    <style>
+        body {
+            max-width: 860px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            letter-spacing: -0.03em;
+            line-height: 1.2;
+        }
+
+        .authors {
+            margin-top: 8px;
+            font-size: 0.85rem;
+            color: #6b7280;
+        }
+
+        .hero-highlights {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .hero-stat {
+            flex: 1;
+            min-width: 120px;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 14px 16px;
+            text-align: center;
+        }
+
+        .hero-stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #6366f1;
+        }
+
+        .hero-stat-label {
+            font-size: 0.65rem;
+            color: #9ca3af;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-top: 2px;
+        }
+
+        .lead {
+            margin-top: 20px;
+            font-size: 0.9rem;
+            color: #374151;
+            line-height: 1.7;
+        }
+
+        .lead strong {
+            color: #111827;
+        }
+
+        .section-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: #111827;
+            margin-top: 32px;
+            margin-bottom: 12px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .demo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .demo-card {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 16px;
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        .demo-card:hover {
+            border-color: #6366f1;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(99,102,241,0.12);
+        }
+
+        .demo-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #111827;
+        }
+
+        .demo-desc {
+            font-size: 0.78rem;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+
+        .demo-tag {
+            display: inline-block;
+            font-size: 0.6rem;
+            padding: 2px 8px;
+            background: #eef2ff;
+            border-radius: 4px;
+            color: #6366f1;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            font-weight: 500;
+        }
+
+        details {
+            margin-top: 8px;
+        }
+
+        details summary {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: #111827;
+            cursor: pointer;
+            padding: 10px 0 6px;
+            border-bottom: 1px solid #e5e7eb;
+            user-select: none;
+            list-style: none;
+        }
+
+        details summary::before {
+            content: '\25B6';
+            display: inline-block;
+            margin-right: 8px;
+            font-size: 0.6rem;
+            color: #9ca3af;
+            transition: transform 0.15s;
+        }
+
+        details[open] summary::before {
+            transform: rotate(90deg);
+        }
+
+        details summary::-webkit-details-marker {
+            display: none;
+        }
+
+        details > :not(summary) {
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .contributions {
+            list-style: none;
+            padding: 0;
+            margin-top: 8px;
+        }
+
+        .contributions li {
+            position: relative;
+            padding: 8px 0 8px 20px;
+            font-size: 0.85rem;
+            color: #374151;
+            line-height: 1.6;
+        }
+
+        .contributions li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 14px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #6366f1;
+        }
+
+        .contributions li strong {
+            color: #111827;
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            margin-top: 8px;
+            display: block;
+            overflow-x: auto;
+        }
+
+        .comparison-table th {
+            text-align: left;
+            padding: 8px 12px;
+            background: #f9fafb;
+            color: #6b7280;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .comparison-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #f3f4f6;
+            color: #374151;
+        }
+
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .comparison-table code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            background: #f3f4f6;
+            padding: 1px 5px;
+            border-radius: 3px;
+            color: #6366f1;
+        }
+
+        .arch-ascii {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            line-height: 1.5;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 16px 20px;
+            color: #374151;
+            overflow-x: auto;
+            white-space: pre;
+            margin-top: 8px;
+        }
+
+        .arch-ascii .comment {
+            color: #9ca3af;
+        }
+
+        .citation {
+            font-size: 0.75rem;
+            color: #6b7280;
+            line-height: 1.6;
+            margin-top: 8px;
+        }
+
+        .citation p {
+            margin: 0 0 8px 0;
+        }
+
+        .citation p:last-child {
+            margin-bottom: 0;
+        }
+
+        .citation a {
+            color: #6366f1;
+            text-decoration: none;
+        }
+
+        .citation a:hover {
+            text-decoration: underline;
+        }
+
+        .footnote {
+            font-size: 0.75rem;
+            color: #9ca3af;
+            margin-top: 32px;
+            padding-top: 16px;
+            border-top: 1px solid #e5e7eb;
+            line-height: 1.6;
+        }
+
+        .footnote a {
+            color: #6366f1;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Loom: A Scalable Computer Architecture for Looped Transformers</h1>
+        <div class="authors">Mehmet Kerem Turkcan</div>
+
+        <p class="lead">
+            <strong>Loom</strong> is a computer architecture for looped transformers.
+            Its weights are derived analytically, requiring no training data and no gradient descent.
+            Programs are written in C, compiled to a 22-opcode ISA (including indirect memory write), and executed as
+            iterated matrix multiplications through 8 fixed-weight transformer layers.
+            The entire machine state fits in a fixed-size bipolar tensor.
+            The architecture scales from <strong>146&times;512</strong> (7.4 MB, 320 instruction slots)
+            through <strong>155&times;1024</strong> (4.7M parameters, 928 slots)
+            to <strong>164&times;2048</strong> (9.0M parameters, 1,792 slots).
+        </p>
+    </header>
+
+    <div class="section-title">Demos</div>
+    <div class="demo-grid">
+        <a href="sorting_viz.html" class="demo-card">
+            <div class="demo-title">Sorting + Architecture Viz</div>
+            <div class="demo-desc">
+                Bubble sort with real-time visualization of all 8 transformer layers.
+                Watch activations flow through the neural architecture as each comparison executes.
+            </div>
+            <div><span class="demo-tag">Visual</span> <span class="demo-tag">Real Activations</span> <span class="demo-tag">3D</span></div>
+        </a>
+        <a href="sorting.html" class="demo-card">
+            <div class="demo-title">Sorting Visualizer</div>
+            <div class="demo-desc">
+                Bubble sort where every comparison and swap is
+                a sequence of transformer forward passes.
+            </div>
+            <div><span class="demo-tag">Visual</span> <span class="demo-tag">Animation</span></div>
+        </a>
+        <a href="snake_game/index.html" class="demo-card">
+            <div class="demo-title">Snake Game</div>
+            <div class="demo-desc">
+                Every tick of this playable game, from movement
+                to collision to food spawning, is computed by the transformer. About 84 steps per frame.
+            </div>
+            <div><span class="demo-tag">Game</span> <span class="demo-tag">210 Instructions</span></div>
+        </a>
+        <a href="life.html" class="demo-card">
+            <div class="demo-title">Game of Life</div>
+            <div class="demo-desc">
+                Conway's rules in C, executed on the larger 164&times;2048 model.
+                570 instructions. Click cells, step through generations.
+            </div>
+            <div><span class="demo-tag">Interactive</span> <span class="demo-tag">Larger Model</span> <span class="demo-tag">570 Instructions</span></div>
+        </a>
+        <a href="doom_e1m1.html" class="demo-card">
+            <div class="demo-title">DOOM E1M1</div>
+            <div class="demo-desc">
+                Playable E1M1 with BSP rendering from the real WAD file.
+                Enemy AI state machines run as compiled C on the ISA interpreter.
+            </div>
+            <div><span class="demo-tag">DOOM</span> <span class="demo-tag">BSP Renderer</span> <span class="demo-tag">Playable</span> <span class="demo-tag">WAD File</span></div>
+        </a>
+        <a href="doom_fast.html" class="demo-card">
+            <div class="demo-title">Doom Deathmatch</div>
+            <div class="demo-desc">
+                DOOM WAD textures, sprites, and HUD with game logic executed
+                entirely on the transformer. 531 instructions, about 500 steps per tick.
+            </div>
+            <div><span class="demo-tag">DOOM</span> <span class="demo-tag">Deathmatch</span> <span class="demo-tag">531 Instructions</span></div>
+        </a>
+        <a href="sudoku.html" class="demo-card">
+            <div class="demo-title">9x9 Sudoku Solver</div>
+            <div class="demo-desc">
+                Full 9x9 Sudoku with backtracking on the compact
+                146x512 model (8.8 MB). ISA interpreter or ONNX transformer.
+            </div>
+            <div><span class="demo-tag">Solver</span> <span class="demo-tag">Backtracking</span> <span class="demo-tag">284 Instructions</span> <span class="demo-tag">146x512</span></div>
+        </a>
+        <a href="debugger_viz.html" class="demo-card">
+            <div class="demo-title">C Debugger + Architecture Viz</div>
+            <div class="demo-desc">
+                Step through compiled C with real-time visualization of all 8 transformer layers.
+                Source highlighting, variable watch, and neural activation flow.
+            </div>
+            <div><span class="demo-tag">Debugger</span> <span class="demo-tag">Real Activations</span> <span class="demo-tag">3D</span></div>
+        </a>
+        <a href="debugger.html" class="demo-card">
+            <div class="demo-title">C Debugger</div>
+            <div class="demo-desc">
+                Step through compiled C one instruction at a time.
+                Watch variables, source highlighting, and the state tensor update live.
+            </div>
+            <div><span class="demo-tag">Step</span> <span class="demo-tag">Source Map</span> <span class="demo-tag">Variables</span></div>
+        </a>
+        <a href="repl.html" class="demo-card">
+            <div class="demo-title">Live C REPL</div>
+            <div class="demo-desc">
+                Write C, compile it with Pyodide, run it on the transformer.
+                The full compile-to-run loop happens entirely client-side.
+            </div>
+            <div><span class="demo-tag">Pyodide</span> <span class="demo-tag">ONNX</span></div>
+        </a>
+    </div>
+
+    <div class="section-title" style="margin-top:24px">How Does It Work?</div>
+    <div class="demo-grid">
+        <a href="opcode_flow.html" class="demo-card">
+            <div class="demo-title">Opcode Data Flow</div>
+            <div class="demo-desc">
+                See how each of the 22 opcodes routes data through 8 transformer
+                layers. Per-layer mechanism badges, state tensor layout, instruction format.
+            </div>
+            <div><span class="demo-tag">Architecture</span> <span class="demo-tag">8 Layers</span> <span class="demo-tag">22 Opcodes</span></div>
+        </a>
+        <a href="attention.html" class="demo-card">
+            <div class="demo-title">Attention Patterns</div>
+            <div class="demo-desc">
+                Interactive guide to the five attention mechanisms: PC fetch, 3-head operand
+                read, pointer dereference, content-addressable search, and write-via-attention.
+            </div>
+            <div><span class="demo-tag">Architecture</span> <span class="demo-tag">Q=K Symmetric</span> <span class="demo-tag">5 Patterns</span></div>
+        </a>
+    </div>
+
+    <details>
+        <summary>Contributions</summary>
+        <ul class="contributions">
+            <li>
+                <strong>Loom architecture.</strong> A 22-opcode ISA: 21 extended opcodes (HALT, MOV, ADD, SUB, INC, DEC, AND, OR, XOR, SHL, SHR, CMP, LOAD, STORE, FIND, SWAP, CMOV, MULACC, JMP, JZ, JNZ) plus SUBLEQ fallback. STORE (indirect memory write) complements LOAD and reduces compiled code size by up to 75% for programs with variable-index array writes. Every opcode is realized through analytically derived attention and feed-forward weight matrices. The central technique, opcode-as-operand-routing, maps all operations to operand preparation for a shared subtract core: 22 opcodes in 8 transformer layers.
+            </li>
+            <li>
+                <strong>C compiler.</strong> Lexer, recursive-descent parser, and code generator that compile a substantial subset of C to the ISA. Supported constructs include integer variables, arrays, if/else, while, for, functions, and logical and bitwise operators.
+            </li>
+            <li>
+                <strong>Scale-independent ISA.</strong> The instruction set is independent of the substrate dimensions. The same 8-layer architecture, compiler, and ISA work at 146&times;512 (320 slots), 155&times;1024 (928 slots), and 164&times;2048 (1,792 slots). Programs are recompiled for each configuration but source code is unchanged. The STORE opcode shrinks the 9&times;9 Sudoku solver from 1,085 to 284 instructions, enabling smaller computer configurations.
+            </li>
+            <li>
+                <strong>Constant-cost execution.</strong> The full machine state lives in a fixed-size bipolar &plusmn;1 tensor. Each step is one forward pass through 8 layers at O(1) cost regardless of program length. Programs run indefinitely with no state growth.
+            </li>
+            <li>
+                <strong>Browser-native deployment.</strong> The ONNX-exported model runs entirely client-side via ONNX Runtime Web. A live C REPL compiles and executes in-browser using Pyodide.
+            </li>
+        </ul>
+    </details>
+
+    <details>
+        <summary>Architecture</summary>
+        <div class="arch-ascii">State X &isin; {-1, +1}<sup>d&times;n</sup>               <span class="comment"># bipolar tensor, entire machine state, e.g. 155&times;1024 or 164&times;2048</span>
+
+  Rows   0-29    Instruction encoding    <span class="comment"># 3 &times; log&#8322; 1024 = 30 rows for [a, b, c] fields</span>
+  Rows  30-37    Memory, 64 slots        <span class="comment"># 8-bit signed integers in bipolar encoding</span>
+  Rows  38-83    Scratchpad              <span class="comment"># internal routing between layers</span>
+  Rows  84-93    Program Counter         <span class="comment"># 10-bit binary address</span>
+  Rows  94-103   Position Encoding       <span class="comment"># column identity for attention addressing</span>
+  Rows 104-145   Buffer, 3N+N+logn=42    <span class="comment"># buf_a 8, buf_b 8, buf_c 8, find_temp 8, load_temp 10</span>
+  Rows 146-153   Address Tags            <span class="comment"># memory column identity for LOAD/FIND</span>
+  Row  154       Indicator               <span class="comment"># marks scratchpad columns</span>
+
+One forward pass = one instruction:
+  L1       Fetch instruction at PC          <span class="comment"># attention over position encoding</span>
+  L2       Read operands + decode opcode    <span class="comment"># 3-head attention, opcode-gated FFN routing</span>
+  L3       Indirect read + correction       <span class="comment"># LOAD/FIND attention + snap to &plusmn;1</span>
+  L4       Subtract, direct borrow chain    <span class="comment"># single-layer a&minus;b via 6-threshold pattern</span>
+  L5       Write result to memory           <span class="comment"># attention-based memory store</span>
+  L6       Branch flag + PC increment       <span class="comment"># merged condition check + PC+1</span>
+  L7       Branch select                    <span class="comment"># choose branch target or PC+1</span>
+  L8       Error correction                 <span class="comment"># clamp values to &plusmn;1</span></div>
+    </details>
+
+    <details>
+        <summary>Layer Design</summary>
+        <div class="citation">
+            <p>
+                Giannou et al., 2023, describe a 13-layer construction for SUBLEQ;
+                their released implementation uses <strong>10 layers</strong> for the same single
+                instruction. Our architecture fits 22 opcodes in <strong>8 layers</strong>.
+                Four design choices keep the layer count below the baseline despite the richer ISA:
+            </p>
+            <p>
+                <strong>1. Fused instruction decode.</strong> Giannou et al. use separate layers
+                for instruction fetching and operand routing. We fold opcode decoding into the
+                memory-read layer, L2, via a 3-head attention stage followed by an FFN with
+                opcode-gated routing. The FFN examines the most significant bits of the
+                instruction address to distinguish extended-mode opcodes at addresses 0 to 31 from
+                SUBLEQ at addresses &ge;32, then copies operands to the appropriate scratchpad
+                positions for each operation.
+            </p>
+            <p>
+                <strong>2. Opcode-as-operand-routing.</strong> All 22 operations reduce
+                to operand preparation for a shared subtract core. ADD a,b, for instance, loads
+                mem[a] into the minuend and &minus;mem[b] into the subtrahend so that subtraction yields addition.
+                AND, OR, and XOR are realized through delta corrections applied to the subtrahend.
+            </p>
+            <p>
+                <strong>3. Direct borrow-chain subtraction.</strong> L4 replaces
+                the classical 3-layer two's complement approach, which flips bits, adds 1, then adds, with a single
+                layer that computes a&minus;b directly using a 6-threshold-per-bit ReLU pattern with
+                built-in carry propagation.
+            </p>
+            <p>
+                <strong>4. Merged branch + PC update.</strong> L6 merges
+                the branch-flag computation and PC increment into one layer, since these
+                are independent FFN computations: flag reads scratchpad and opcodes, while PC+1 reads PC bits.
+                Scratchpad correction is folded into L3's FFN alongside indirect read.
+            </p>
+            <p>
+                L3 serves two purposes: its 2-head attention handles LOAD for pointer dereference and FIND
+                for content-addressable search, while its FFN clamps soft-attention outputs to exact
+                bipolar values before the ALU stage. The 3-head attention routing in L2 produces outputs
+                that deviate further from &plusmn;1 than the simpler single-instruction case, making this
+                intermediate correction necessary for numerical stability.
+            </p>
+        </div>
+    </details>
+
+    <details>
+        <summary>Comparison</summary>
+        <table class="comparison-table">
+            <tr>
+                <th></th>
+                <th>This Work</th>
+                <th>Percepta, Tzamos 2026</th>
+                <th>Autoregressive LLM</th>
+            </tr>
+            <tr>
+                <td>Paradigm</td>
+                <td>Looped, fixed state</td>
+                <td>Autoregressive, trace</td>
+                <td>Autoregressive, tokens</td>
+            </tr>
+            <tr>
+                <td>State</td>
+                <td>Fixed-size tensor, <code>155&times;1024</code></td>
+                <td>Growing execution trace</td>
+                <td>Growing token sequence</td>
+            </tr>
+            <tr>
+                <td>Cost per step</td>
+                <td>O(1), same 8 layers</td>
+                <td>O(log t) via HullKVCache</td>
+                <td>O(t) or O(log t)</td>
+            </tr>
+            <tr>
+                <td>Weights</td>
+                <td>Analytically computed</td>
+                <td>Constructed or trained, unspecified</td>
+                <td>Trained on data</td>
+            </tr>
+            <tr>
+                <td>Architecture</td>
+                <td>8 layers, d=155, custom ISA</td>
+                <td>7 layers, d=36, 18 2D-heads</td>
+                <td>Varies, billions of params</td>
+            </tr>
+            <tr>
+                <td>Program location</td>
+                <td>In the state tensor</td>
+                <td>Interpreter in weights; program as input tokens</td>
+                <td>In the prompt</td>
+            </tr>
+            <tr>
+                <td>Programs</td>
+                <td>C &rarr; custom ISA &rarr; state tensor</td>
+                <td>C/C++ &rarr; WASM bytecode &rarr; input tokens</td>
+                <td>Natural language prompts</td>
+            </tr>
+            <tr>
+                <td>Determinism</td>
+                <td>Exact, no sampling</td>
+                <td>Exact, greedy decoding</td>
+                <td>Probabilistic</td>
+            </tr>
+            <tr>
+                <td>Memory</td>
+                <td>Constant, fixed tensor</td>
+                <td>Grows with execution time</td>
+                <td>Grows with context</td>
+            </tr>
+        </table>
+    </details>
+
+    <details>
+        <summary>Related Work</summary>
+        <div class="citation">
+            <p>
+                <a href="https://arxiv.org/abs/2301.13196">Looped Transformers as Programmable Computers</a>
+                by Giannou et al., 2023, showed that a fixed-depth transformer with analytically
+                constructed weights can execute the SUBLEQ instruction. Our work addresses what
+                follows: how to architect a multi-operation ISA on this substrate, how to compile
+                high-level programs to it, and how the resulting architecture scales.
+            </p>
+            <p>
+                <strong>Extensions of the programmable-computer framework.</strong>
+                <a href="https://arxiv.org/abs/2410.09375">Looped ReLU MLPs May Be All You Need as Practical Programmable Computers</a>
+                by Liang et al., 2024, shows that a 23-layer ReLU-MLP can also emulate a programmable
+                computer with analytical weights, using MLPs instead of transformers.
+                <a href="https://arxiv.org/abs/2402.01107">Simulation of Graph Algorithms with Looped Transformers</a>
+                by Giannou et al., 2024, extends the original framework with a dual-memory SUBLEQ
+                variant for graph problems but remains single-instruction.
+                <a href="https://arxiv.org/abs/2501.10688">Neural Algorithmic Reasoning for Hypergraphs with Looped Transformers</a>
+                by Li et al., 2025, extends looped transformer algorithmic reasoning from
+                graphs to hypergraphs.
+                <a href="https://arxiv.org/abs/2410.01405">On Expressive Power of Looped Transformers</a>
+                by Xu and Sato, ICML 2025, establishes formal approximation rates for looped
+                transformers and proposes timestep encoding to enhance expressivity.
+            </p>
+            <p>
+                <strong>Exact neural computation.</strong>
+                <a href="https://arxiv.org/abs/2502.16763">Learning to Add, Multiply, and Execute Algorithmic Instructions Exactly with Neural Networks</a>
+                by Back de Luca et al., NeurIPS 2025, proves that two-layer networks can learn to
+                execute binary addition, multiplication, and Subtract-and-Branch-if-Negative exactly,
+                using the NTK framework with trained rather than analytically constructed networks.
+                <a href="https://arxiv.org/abs/2407.04899">Algorithmic Language Models with Neurally Compiled Libraries</a>
+                by Saldyt and Kambhampati, 2024, augments LLaMA3 with memory, registers, and basic
+                operations, compiling algorithms into differentiable libraries.
+            </p>
+            <p>
+                <strong>Analytical weight construction and compilation.</strong>
+                <a href="https://arxiv.org/abs/2301.05062">Tracr</a>
+                by Lindner et al., 2023, compiles RASP programs to transformer weights for
+                interpretability research.
+                <a href="https://arxiv.org/abs/2106.06981">Thinking Like Transformers</a>
+                by Weiss et al., 2021, introduced RASP as a programming language that maps to
+                transformer primitives. Both construct weights analytically but target
+                interpretability, not general-purpose computation.
+                <a href="https://arxiv.org/abs/2410.18077">ALTA</a>
+                by Shaw et al., 2024, extends RASP/Tracr with loops and compiles to Universal Transformers.
+                <a href="https://arxiv.org/abs/2410.14706">Transformers are Efficient Compilers, Provably</a>
+                by Bai et al., 2024, shows that trained transformers can perform compilation.
+                <a href="https://arxiv.org/abs/2601.05770">Weights to Code</a>,
+                2026, works in the reverse direction, extracting executable programs from trained
+                transformer weights.
+            </p>
+            <p>
+                <strong>Transformer Turing completeness.</strong>
+                <a href="https://arxiv.org/abs/2410.03170">Autoregressive Large Language Models are Computationally Universal</a>
+                by Schuurmans et al., 2024, shows that autoregressive decoding itself realizes
+                universal computation via Lag systems.
+                <a href="https://arxiv.org/abs/2506.12027">Constant Bit-size Transformers Are Turing Complete</a>
+                by Li and Wang, 2025, proves constant-parameter transformers are Turing complete with
+                sufficient context.
+                <a href="https://arxiv.org/abs/2511.20038">Softmax Transformers are Turing-Complete</a>
+                by Jiang et al., 2025, settles the open question for softmax attention.
+                <a href="https://arxiv.org/abs/2512.00003">Efficient Turing Machine Simulation with Transformers</a>
+                by Li and Wang, 2025, shows that sparse attention with fixed geometric offsets
+                suffices for efficient universal computation.
+            </p>
+            <p>
+                <strong>Trained neural computers.</strong>
+                <a href="https://percepta.ai/blog/can-llms-be-computers">Can LLMs Be Computers?</a>
+                by Tzamos et al. at Percepta, 2026, implements a WebAssembly interpreter inside a
+                7-layer autoregressive transformer with d=36 and 18 two-dimensional attention heads. The model
+                generates execution traces token-by-token. HullKVCache uses 2D
+                attention heads to build convex hulls over prior tokens, giving O(log&nbsp;t) lookups
+                instead of linear scans, yielding 30k&nbsp;tok/s throughput and multi-million-step
+                executions. The weight construction method is not fully specified in the blog post;
+                the authors describe both "implementing" the interpreter in weights and the model "learning"
+                it. The approach is architecturally distinct from ours: in Percepta,
+                the execution logic, a WASM interpreter, is encoded in the weights, with programs
+                supplied as input tokens and executed as a growing autoregressive trace. In Loom,
+                the weights are program-independent. Programs live in the state tensor,
+                and the same fixed-weight model executes any compiled program at O(1) per step with
+                no state growth.
+            </p>
+            <p>
+                <strong>Program execution and simulation.</strong>
+                <a href="https://arxiv.org/abs/2407.03310">Universal Length Generalization with Turing Programs</a>
+                by Hou et al., 2024, decomposes algorithms into Turing machine steps as chain-of-thought,
+                constructing RASP programs that simulate arbitrary TMs.
+                <a href="https://arxiv.org/abs/2502.03568">Code Simulation as a Proxy for High-order Tasks in Large Language Models</a>
+                by La Malfa et al., 2025, studies LLMs simulating code execution as a reasoning proxy.
+            </p>
+        </div>
+    </details>
+
+    <div class="footnote">
+        All model weights are analytically derived. No training data, no gradient descent,
+        no GPU hours. The optimized ONNX model is 7.4 MB at 146&times;512 (with fused K<sup>T</sup>Q and onnxsim).
+        The standard model is about 16 MB at 155&times;1024. The Game of Life
+        and Sudoku models are 28 to 31 MB at 164&times;2048. Demos require a modern browser with
+        WebAssembly support.
+    </div>
+</body>
+</html>

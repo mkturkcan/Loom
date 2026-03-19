@@ -1,0 +1,58 @@
+{
+  "name": "primes",
+  "title": "Prime Counter",
+  "description": "Count primes up to 10",
+  "source": "int is_prime(int p) {\n    int d = 2;\n    while (d < p) {\n        int rem = p;\n        while (rem >= d) {\n            rem = rem - d;\n        }\n        if (rem == 0) {\n            return 0;\n        }\n        d += 1;\n    }\n    return 1;\n}\n\nint main() {\n    int count = 0;\n    int p = 2;\n    while (p <= 10) {\n        if (is_prime(p)) {\n            count += 1;\n        }\n        p += 1;\n    }\n    return count;\n}\n",
+  "variables": {
+    "count": 9,
+    "p": 10,
+    "d": 14,
+    "rem": 15
+  },
+  "num_instructions": 32,
+  "opcode_counts": {
+    "MOV": 14,
+    "SUB": 5,
+    "CMP": 3,
+    "JMP": 4,
+    "JNZ": 1,
+    "ADD": 3,
+    "JZ": 1,
+    "HALT": 1
+  },
+  "source_map": {
+    "96": 17,
+    "97": 18,
+    "98": 19,
+    "101": 20,
+    "102": 2,
+    "103": 3,
+    "107": 4,
+    "108": 5,
+    "111": 6,
+    "115": 8,
+    "118": 9,
+    "119": 11,
+    "121": 13,
+    "123": 21,
+    "124": 23,
+    "126": 25
+  },
+  "retval_addr": 7,
+  "output_addr": 8,
+  "expected": {
+    "RETVAL": 4
+  },
+  "config": {
+    "s": 32,
+    "m": 64,
+    "n": 1024,
+    "N": 8,
+    "d_model": 155,
+    "logn": 10,
+    "idx_memory": 30,
+    "idx_pc": 84,
+    "idx_pos_enc": 94,
+    "idx_tag": 146
+  }
+}

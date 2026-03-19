@@ -1,0 +1,1669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOOM — Loom</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <link rel="stylesheet" href="common.css">
+    <script src="c_compiler.js"></script>
+    <script src="isa_interpreter.js"></script>
+    <style>
+        .game-row { display: flex; gap: 16px; align-items: flex-start; }
+
+        .viewport-container {
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+            position: relative;
+            width: min(640px, 100%);
+        }
+
+        #viewport {
+            display: block;
+            image-rendering: pixelated;
+            width: min(640px, 100%);
+            height: 400px;
+        }
+
+        .doom-statusbar {
+            height: 64px;
+            background: #4b4b4b;
+            width: min(640px, 100%);
+            overflow: hidden;
+        }
+
+        .doom-statusbar canvas {
+            display: block;
+            image-rendering: pixelated;
+            width: min(640px, 100%);
+            height: 64px;
+        }
+
+        .hud-section { display: flex; align-items: center; gap: 8px; }
+        .hud-label { font-size: 9px; color: #aaa; text-transform: uppercase; letter-spacing: 0.05em; }
+        .hud-value { font-size: 18px; font-weight: 700; min-width: 30px; text-align: center; }
+        .hud-health { color: #ef4444; }
+        .hud-ammo { color: #f59e0b; }
+        .hud-kills { color: #10b981; }
+
+        .minimap-container {
+            background: #fff; border: 1px solid #e5e7eb;
+            border-radius: 10px; padding: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        .minimap-label {
+            text-align: center; font-size: 0.7rem; color: #9ca3af;
+            text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;
+        }
+
+        #minimap { display: block; image-rendering: pixelated; border-radius: 4px; }
+
+        .game-controls {
+            display: flex; gap: 8px; align-items: center;
+            padding: 12px 16px; background: #fff;
+            border: 1px solid #e5e7eb; border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04); flex-wrap: wrap;
+        }
+
+        .map-btn {
+            font-family: 'JetBrains Mono', monospace; font-size: 11px;
+            padding: 5px 10px; border-radius: 5px;
+            border: 1px solid #d1d5db; background: #fff;
+            cursor: pointer; transition: all 0.15s;
+        }
+
+        .map-btn:hover { border-color: #93c5fd; background: #eff6ff; }
+        .map-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+
+        .wad-upload {
+            display: flex; flex-direction: column; align-items: center;
+            gap: 16px; padding: 40px 20px;
+            border: 2px dashed #d1d5db; border-radius: 12px;
+            background: #fafbfc; margin-bottom: 20px;
+        }
+
+        .wad-upload.loaded { display: none; }
+
+        .wad-upload label {
+            font-family: 'JetBrains Mono', monospace; font-size: 13px;
+            padding: 8px 20px; border-radius: 6px;
+            background: #3b82f6; color: #fff; cursor: pointer;
+        }
+
+        .wad-upload label:hover { background: #2563eb; }
+        .wad-status { font-size: 12px; color: #6b7280; }
+
+        .disclosure {
+            font-size: 11px; color: #6b7280; background: #f9fafb;
+            border: 1px solid #e5e7eb; border-radius: 8px;
+            padding: 10px 14px; line-height: 1.6; margin-top: 12px;
+        }
+
+        .disclosure strong { color: #374151; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="index.html">Doom Deathmatch</a></h1>
+        <p class="subtitle">
+            Game logic compiled from C and executed via ISA interpreter or ONNX transformer.
+            Same C source, same compiled instructions. Two execution engines.
+        </p>
+    </header>
+
+    <div class="wad-upload" id="wadUpload">
+        <div style="font-size:14px;font-weight:600;color:#374151">Loading DOOM WAD...</div>
+        <div id="wadLoadStatus" class="wad-status">Fetching doom1.wad...</div>
+        <div class="wad-status" style="margin-top:8px">
+            Or upload your own: <label for="wadFile" style="display:inline;padding:4px 10px;font-size:11px">Choose WAD File</label>
+            <input type="file" id="wadFile" accept=".wad" style="display:none">
+        </div>
+    </div>
+
+    <div id="gameArea" style="display:none">
+        <div class="page-layout">
+            <div class="network-panel" id="networkPanel"></div>
+
+            <div class="main-panel">
+                <div class="game-controls">
+                    <button class="map-btn active" id="modeBtn" style="background:#10b981;color:#fff;border-color:#10b981">ISA Interpreter</button>
+                    <span style="color:#9ca3af;font-size:11px">|</span>
+                    <button class="map-btn active" data-map="pillars">E1M1</button>
+                    <button class="map-btn" data-map="maze">E1M2</button>
+                    <span style="color:#9ca3af;font-size:11px">|</span>
+                    <button class="map-btn active" id="aiBtn">Player AI On, recommended</button>
+                    <span style="color:#9ca3af;font-size:11px">|</span>
+                    <button class="map-btn" id="stepModeBtn">Step View</button>
+                    <span style="color:#9ca3af;font-size:11px;flex:1">
+                        WASD/Arrows: move &middot; Space: shoot &middot; Click viewport to focus
+                    </span>
+                    <span style="color:#9ca3af;font-size:11px" id="stepCounter" style="display:none"></span>
+                    <span style="color:#9ca3af;font-size:11px" id="tickInfo">Tick 0</span>
+                </div>
+
+                <div class="game-row">
+                    <div class="viewport-container">
+                        <canvas id="viewport" width="320" height="200"></canvas>
+                        <div class="doom-statusbar" id="statusBar">
+                            <canvas id="hudCanvas" width="320" height="32"></canvas>
+                        </div>
+                    </div>
+                    <div class="minimap-container" id="minimapContainer" style="display:none">
+                        <div class="minimap-label">Automap</div>
+                        <canvas id="minimap" width="120" height="120"></canvas>
+                    </div>
+                </div>
+
+                <div class="disclosure">
+                    <strong>Two execution engines, one compiled program.</strong>
+                    The C game logic is compiled in-browser to ISA instructions.
+                    <strong>ISA Interpreter</strong> (default) executes instructions directly. No neural network needed.
+                    <strong>ONNX Transformer</strong> runs the same instructions as neural network forward passes.
+                    Both modes produce identical results, proving the transformer faithfully implements the ISA.
+                    <br><br>
+                    Rendering uses a JavaScript raycaster with real DOOM textures and sprites from the WAD.
+                    Toggle between engines with the button above to compare speed and verify correctness.
+                </div>
+
+                <!-- C Source Code -->
+                <div class="code-panel" id="sourcePanel" style="display:none">
+                    <div class="code-header" style="cursor:pointer" onclick="document.getElementById('sourceBody').style.display = document.getElementById('sourceBody').style.display === 'none' ? '' : 'none'">
+                        <span class="code-header-title">C Source: Game Logic</span>
+                        <span style="font-size:0.7rem;color:#9ca3af" id="sourceStats"></span>
+                    </div>
+                    <div class="code-body" id="sourceBody" style="max-height:480px"></div>
+                </div>
+
+                <!-- ISA Disassembly -->
+                <div class="code-panel" id="isaPanel" style="display:none">
+                    <div class="code-header" style="cursor:pointer" onclick="document.getElementById('isaBody').style.display = document.getElementById('isaBody').style.display === 'none' ? '' : 'none'">
+                        <span class="code-header-title">Compiled ISA Instructions</span>
+                        <span style="font-size:0.7rem;color:#9ca3af" id="isaStats"></span>
+                    </div>
+                    <div class="code-body" id="isaBody" style="max-height:480px;display:none"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="common.js"></script>
+    <script>
+    (async function() {
+        /* ── Constants ─────────────────────────────────────── */
+        const MAP_SIZE = 8, SUBCELL = 8;
+        const SCR_W = 320, SCR_H = 200;         // Native DOOM resolution
+        const HUD_H = 32;                        // Status bar height
+        const MINIMAP_SIZE = 120;
+        const FOV = Math.PI / 3;
+        const NUM_RAYS = SCR_W;
+        const NUM_ANGLES = 32, HP_MAX = 8;  // 32 angles natively in transformer program
+
+        const MAPS = {
+            pillars: [127, 65, 65, 73, 65, 73, 65, 127],
+            maze:    [127, 65, 93, 65, 69, 81, 65, 127],
+        };
+
+        /* ── Game state ────────────────────────────────────── */
+        let config = null, programInfo = null;
+        let state = null, initialState = null;
+        let gameRunning = false, totalSteps = 0, tickNum = 0;
+
+        /* ── ISA interpreter state ────────────────────────── */
+        let useISA = true;           // true = ISA interpreter, false = ONNX
+        let isaInterpreter = null;   // ISAInterpreter instance
+        let compileResult = null;    // output of compileC()
+        let cSource = null;          // C source code
+        let currentMap = 'pillars', mapData = MAPS.pillars;
+        let tickInProgress = false, aiEnabled = true;
+        let lastShootTick = -10, damageFlash = 0, hitMarker = 0;
+        let prevHp = HP_MAX, prevEhp = [3, 3], totalKills = 0;
+        let stepMode = false, stepDelay = 20;  // ms between animated steps
+        const keysDown = new Set();
+
+        /* ── Smooth rendering state ───────────────────────── */
+        let latestGs = null;
+        let renderFrame = 0;
+        let displayPx = 0, displayPy = 0, displayAngle = 0;
+
+        /* ── Shooting animation ───────────────────────────── */
+        let shootTimer = 0;
+        const SHOOT_RENDER_FRAMES = 24;
+
+        /* ── Death animation ──────────────────────────────── */
+        let enemyDeathTimers = [0, 0];          // render frames remaining
+        const DEATH_RENDER_FRAMES = 50;         // ~0.8s at 60fps (5 frames × 10 frames each)
+        let deadEnemyPos = [{x:0,y:0}, {x:0,y:0}];
+
+        /* ── Enemy attack animation ──────────────────────── */
+        let enemyAttackTimers = [0, 0];
+        const ATTACK_RENDER_FRAMES = 20;
+
+        /* ── Enemy pain animation ────────────────────────── */
+        let enemyPainTimers = [0, 0];
+        const PAIN_RENDER_FRAMES = 12;
+
+        /* ── State tensor trimming ────────────────────────── */
+        let useTrimming = true;
+        let nTrimmed = null;
+
+        /* ── Canvases ──────────────────────────────────────── */
+        const vpCanvas = document.getElementById('viewport');
+        const vpCtx = vpCanvas.getContext('2d');
+        const vpImageData = vpCtx.createImageData(SCR_W, SCR_H);
+        const vpPixels = new Uint32Array(vpImageData.data.buffer);
+
+        const hudCanvas = document.getElementById('hudCanvas');
+        const hudCtx = hudCanvas.getContext('2d');
+
+        const mmCanvas = document.getElementById('minimap');
+        const mmCtx = mmCanvas.getContext('2d');
+
+        document.getElementById('networkPanel').innerHTML = buildNetworkPanelHTML();
+
+        /* ============================================================
+         *  WAD Parsing
+         * ============================================================ */
+        let doomPalette = null;        // Uint32Array[256]
+        let wallTextures = {};         // name → { width, height, pixels }
+        let flatTextures = {};         // _floor, _ceil → Uint32Array(4096)
+        let skyColumns = null;         // column data for sky rendering
+        let shotgunFrames = [];        // array of { width, height, pixels, leftOffset, topOffset }
+        let hudBarSprite = null;       // STBAR sprite
+        let hudNumbers = [];           // STTNUM0-9 sprites
+        let hudFaces = [];             // face sprites
+        let enemySprites = [[], []];      // walk animation frames per enemy type
+        let enemyAttackSprites = [null, null]; // attack frames
+        let enemyPainSprites = [null, null];  // pain/hurt frames
+        let enemyDeadSprites = [[], []]; // death animation frames per enemy type
+        let enemySpriteCanvases = {};  // cached canvases for sprite rendering
+        let lumpsArr = [];
+
+        function parseWAD(ab) {
+            const dv = new DataView(ab);
+            const readStr = (off, len) => {
+                let s = '';
+                for (let i = 0; i < len; i++) { const c = dv.getUint8(off+i); if(!c) break; s += String.fromCharCode(c); }
+                return s;
+            };
+            const wt = readStr(0,4);
+            if (wt !== 'IWAD' && wt !== 'PWAD') throw new Error('Invalid WAD');
+            const nl = dv.getInt32(4,true), dirOff = dv.getInt32(8,true);
+            const lumps = [];
+            for (let i = 0; i < nl; i++) {
+                const o = dirOff + i*16;
+                lumps.push({
+                    name: readStr(o+8, 8),
+                    filePos: dv.getInt32(o, true),
+                    size: dv.getInt32(o+4, true),
+                    data: ab.slice(dv.getInt32(o, true), dv.getInt32(o, true) + dv.getInt32(o+4, true))
+                });
+            }
+            return lumps;
+        }
+
+        function extractPalette(lumps) {
+            const lump = lumps.find(l => l.name === 'PLAYPAL');
+            if (!lump) throw new Error('PLAYPAL not found');
+            const dv = new DataView(lump.data);
+            const pal = new Uint32Array(256);
+            for (let i = 0; i < 256; i++) {
+                const r = dv.getUint8(i*3), g = dv.getUint8(i*3+1), b = dv.getUint8(i*3+2);
+                pal[i] = (255 << 24) | (b << 16) | (g << 8) | r;
+            }
+            return pal;
+        }
+
+        function extractPatchNames(lumps) {
+            const lump = lumps.find(l => l.name === 'PNAMES');
+            if (!lump) return [];
+            const dv = new DataView(lump.data);
+            const count = dv.getInt32(0, true), names = [];
+            for (let i = 0; i < count; i++) {
+                let n = '';
+                for (let j = 0; j < 8; j++) { const c = dv.getUint8(4+i*8+j); if(!c) break; n += String.fromCharCode(c); }
+                names.push(n);
+            }
+            return names;
+        }
+
+        function parseTextureDefs(lumps) {
+            const defs = [];
+            for (const name of ['TEXTURE1', 'TEXTURE2']) {
+                const lump = lumps.find(l => l.name === name);
+                if (!lump) continue;
+                const dv = new DataView(lump.data);
+                const count = dv.getInt32(0, true);
+                for (let i = 0; i < count; i++) {
+                    const texOff = dv.getInt32(4+i*4, true);
+                    let texName = '';
+                    for (let j = 0; j < 8; j++) { const c = dv.getUint8(texOff+j); if(!c) break; texName += String.fromCharCode(c); }
+                    const w = dv.getInt16(texOff+12, true), h = dv.getInt16(texOff+14, true);
+                    const pc = dv.getInt16(texOff+20, true), patches = [];
+                    for (let p = 0; p < pc; p++) {
+                        const po = texOff + 22 + p*10;
+                        patches.push({ originX: dv.getInt16(po,true), originY: dv.getInt16(po+2,true), patchNum: dv.getInt16(po+4,true) });
+                    }
+                    defs.push({ name: texName, width: w, height: h, patches });
+                }
+            }
+            return defs;
+        }
+
+        /* Parse a patch-format lump into { width, height, leftOffset, topOffset, pixels } */
+        function parsePatchSprite(lumpData, palette) {
+            const dv = new DataView(lumpData);
+            const w = dv.getUint16(0,true), h = dv.getUint16(2,true);
+            const leftOff = dv.getInt16(4,true), topOff = dv.getInt16(6,true);
+            const pixels = new Uint32Array(w * h);  // 0 = transparent
+            for (let col = 0; col < w; col++) {
+                let off = dv.getUint32(8 + col*4, true);
+                while (true) {
+                    const topDelta = dv.getUint8(off++);
+                    if (topDelta === 0xFF) break;
+                    const length = dv.getUint8(off++);
+                    off++; // padding
+                    for (let row = 0; row < length; row++) {
+                        const y = topDelta + row;
+                        if (y < h) pixels[y * w + col] = palette[dv.getUint8(off)];
+                        off++;
+                    }
+                    off++; // padding
+                }
+            }
+            return { width: w, height: h, leftOffset: leftOff, topOffset: topOff, pixels };
+        }
+
+        function compositeTexture(texDef, lumps, patchNames, palette) {
+            const { width, height, patches } = texDef;
+            const pixels = new Uint32Array(width * height);
+            for (const p of patches) {
+                const pn = patchNames[p.patchNum];
+                if (!pn) continue;
+                const pl = lumps.find(l => l.name === pn);
+                if (!pl) continue;
+                const sprite = parsePatchSprite(pl.data, palette);
+                for (let cy = 0; cy < sprite.height; cy++) {
+                    const destY = p.originY + cy;
+                    if (destY < 0 || destY >= height) continue;
+                    for (let cx = 0; cx < sprite.width; cx++) {
+                        const destX = p.originX + cx;
+                        if (destX < 0 || destX >= width) continue;
+                        const px = sprite.pixels[cy * sprite.width + cx];
+                        if (px) pixels[destY * width + destX] = px;
+                    }
+                }
+            }
+            return { width, height, pixels };
+        }
+
+        function extractFlat(lumps, name, palette) {
+            const lump = lumps.find(l => l.name === name);
+            if (!lump || lump.size !== 4096) return null;
+            const raw = new Uint8Array(lump.data);
+            const pixels = new Uint32Array(4096);
+            for (let i = 0; i < 4096; i++) pixels[i] = palette[raw[i]];
+            return pixels;
+        }
+
+        /* Build sky column data from SKY1 texture */
+        function buildSkyColumns(texDef, lumps, patchNames, palette) {
+            const sky = compositeTexture(texDef, lumps, patchNames, palette);
+            return sky; // { width, height, pixels }
+        }
+
+        const WALL_TEX_NAMES = [
+            'STARTAN3', 'STARG3', 'BROWN1', 'BROWNGRN', 'STONE2',
+            'STARTAN2', 'STARGR1', 'BROWN96', 'TEKWALL1', 'GRAY1',
+        ];
+        const FLOOR_NAMES = ['FLOOR4_8', 'FLAT14', 'FLOOR0_1', 'FLAT5_4', 'NUKAGE1', 'FLOOR0_6'];
+        const CEIL_NAMES = ['CEIL3_5', 'FLAT20', 'CEIL1_1', 'FLAT1', 'CEIL3_3'];
+        const SHOTGUN_NAMES = ['SHTGA0', 'SHTGB0', 'SHTGC0', 'SHTGD0'];
+        const FACE_NAMES = ['STFST01', 'STFST00', 'STFST02', 'STFTR00', 'STFKILL0', 'STFOUCH0'];
+
+        async function loadWAD(fileOrAB) {
+            const status = document.getElementById('wadLoadStatus');
+            status.textContent = 'Reading WAD file...';
+
+            const ab = fileOrAB instanceof ArrayBuffer ? fileOrAB : await fileOrAB.arrayBuffer();
+            status.textContent = 'Parsing WAD...';
+            lumpsArr = parseWAD(ab);
+            doomPalette = extractPalette(lumpsArr);
+            const pnames = extractPatchNames(lumpsArr);
+            const texDefs = parseTextureDefs(lumpsArr);
+
+            status.textContent = 'Extracting textures...';
+            await new Promise(r => setTimeout(r, 10));
+
+            // Wall textures
+            let loaded = 0;
+            for (const name of WALL_TEX_NAMES) {
+                const def = texDefs.find(t => t.name === name);
+                if (def) { wallTextures[name] = compositeTexture(def, lumpsArr, pnames, doomPalette); loaded++; }
+                if (loaded >= 6) break;
+            }
+            if (loaded < 3) {
+                for (const def of texDefs.slice(0, 30)) {
+                    if (!wallTextures[def.name] && def.width <= 256 && def.height <= 128) {
+                        wallTextures[def.name] = compositeTexture(def, lumpsArr, pnames, doomPalette);
+                        if (++loaded >= 4) break;
+                    }
+                }
+            }
+
+            // Sky texture
+            const skyDef = texDefs.find(t => t.name === 'SKY1') || texDefs.find(t => t.name.startsWith('SKY'));
+            if (skyDef) skyColumns = buildSkyColumns(skyDef, lumpsArr, pnames, doomPalette);
+
+            // Floor/ceiling flats
+            for (const n of FLOOR_NAMES) { const f = extractFlat(lumpsArr, n, doomPalette); if (f) { flatTextures._floor = f; break; } }
+            for (const n of CEIL_NAMES) { const f = extractFlat(lumpsArr, n, doomPalette); if (f) { flatTextures._ceil = f; break; } }
+            if (!flatTextures._floor) { flatTextures._floor = new Uint32Array(4096); flatTextures._floor.fill(doomPalette[96]||0xFF404040); }
+            if (!flatTextures._ceil) { flatTextures._ceil = new Uint32Array(4096); flatTextures._ceil.fill(doomPalette[104]||0xFF303030); }
+
+            // Shotgun sprites
+            status.textContent = 'Extracting sprites...';
+            await new Promise(r => setTimeout(r, 10));
+            for (const name of SHOTGUN_NAMES) {
+                const lump = lumpsArr.find(l => l.name === name);
+                if (lump && lump.size > 8) {
+                    try { shotgunFrames.push(parsePatchSprite(lump.data, doomPalette)); } catch(e) { console.warn('Failed to parse', name, e); }
+                }
+            }
+            // Debug: find all weapon-related lumps
+            const weaponLumps = lumpsArr.filter(l => l.name.startsWith('SHTG') || l.name.startsWith('SHT1') || l.name.startsWith('SHT2') || l.name.startsWith('PISG') || l.name.startsWith('PISF') || l.name.startsWith('PUNG'));
+            console.log('Weapon lumps found:', weaponLumps.map(l => l.name + '(' + l.size + ')'));
+
+            // If no shotgun frames, try pistol or other weapon sprites
+            if (shotgunFrames.length === 0) {
+                const altNames = ['PISGA0', 'PISGB0', 'PISGC0', 'PISGD0', 'PISGE0',
+                                  'SHT1A0', 'SHT1B0', 'SHT1C0', 'SHT1D0',
+                                  'SHT2A0', 'SHT2B0', 'SHT2C0', 'SHT2D0',
+                                  'PUNGB0', 'PUNGA0'];
+                for (const name of altNames) {
+                    const lump = lumpsArr.find(l => l.name === name);
+                    if (lump && lump.size > 8) {
+                        try { shotgunFrames.push(parsePatchSprite(lump.data, doomPalette)); } catch(e) {}
+                    }
+                    if (shotgunFrames.length >= 2) break;
+                }
+            }
+            cacheShotgunCanvases();
+            console.log('Shotgun frames:', shotgunFrames.length, shotgunFrames.map(f => ({w:f.width, h:f.height, lo:f.leftOffset, to:f.topOffset})));
+
+            // Status bar
+            const stbar = lumpsArr.find(l => l.name === 'STBAR');
+            if (stbar && stbar.size > 8) {
+                try { hudBarSprite = parsePatchSprite(stbar.data, doomPalette); } catch(e) {}
+            }
+
+            // HUD numbers (STTNUM0-9)
+            for (let i = 0; i <= 9; i++) {
+                const lump = lumpsArr.find(l => l.name === 'STTNUM' + i);
+                if (lump && lump.size > 8) {
+                    try { hudNumbers.push(parsePatchSprite(lump.data, doomPalette)); } catch(e) { hudNumbers.push(null); }
+                } else { hudNumbers.push(null); }
+            }
+            // STTMINUS and STTPRCNT
+            const pctLump = lumpsArr.find(l => l.name === 'STTPRCNT');
+            if (pctLump && pctLump.size > 8) {
+                try { hudNumbers[10] = parsePatchSprite(pctLump.data, doomPalette); } catch(e) {}
+            }
+
+            // Face sprites
+            for (const name of FACE_NAMES) {
+                const lump = lumpsArr.find(l => l.name === name);
+                if (lump && lump.size > 8) {
+                    try { hudFaces.push(parsePatchSprite(lump.data, doomPalette)); } catch(e) { hudFaces.push(null); }
+                } else { hudFaces.push(null); }
+            }
+
+            // Enemy sprites — zombieman (POSS) and sergeant/imp (SPOS/TROO)
+            // Walk frames: A-D, attack: E/F, dead: N/O
+            const ENEMY_SPRITE_SETS = [
+                { walk: ['POSSA1','POSSB1','POSSC1','POSSD1','POSSA0','POSSB0','POSSC0','POSSD0'],
+                  attack: ['POSSE0','POSSF0'],
+                  pain: ['POSSG0','POSSG1'],
+                  dead: ['POSSH0','POSSI0','POSSJ0','POSSK0','POSSL0',
+                         'POSSH1','POSSI1','POSSJ1','POSSK1','POSSL1'] },
+                { walk: ['SPOSA1','SPOSB1','SPOSC1','SPOSD1','TROOA1','TROOB1','TROOC1','TROOD1',
+                         'SPOSA0','SPOSB0','SPOSC0','SPOSD0','TROOA0','TROOB0','TROOC0','TROOD0'],
+                  attack: ['SPOSE0','SPOSF0','TROOE0','TROOF0'],
+                  pain: ['SPOSG0','TROOG0','SPOSG1','TROOG1'],
+                  dead: ['SPOSH0','SPOSI0','SPOSJ0','SPOSK0','SPOSL0',
+                         'TROOH0','TROOI0','TROOJ0','TROOK0','TROOL0',
+                         'SPOSH1','SPOSI1','SPOSJ1','SPOSK1','SPOSL1'] },
+            ];
+            for (let ei = 0; ei < 2; ei++) {
+                const set = ENEMY_SPRITE_SETS[ei];
+                // Load up to 4 walk frames
+                for (const n of set.walk) {
+                    const l = lumpsArr.find(x => x.name === n);
+                    if (l && l.size > 8) { try { enemySprites[ei].push(parsePatchSprite(l.data, doomPalette)); } catch(e){} }
+                    if (enemySprites[ei].length >= 4) break;
+                }
+                for (const n of set.attack) {
+                    const l = lumpsArr.find(x => x.name === n);
+                    if (l && l.size > 8) { try { enemyAttackSprites[ei] = parsePatchSprite(l.data, doomPalette); break; } catch(e){} }
+                }
+                for (const n of set.pain) {
+                    const l = lumpsArr.find(x => x.name === n);
+                    if (l && l.size > 8) { try { enemyPainSprites[ei] = parsePatchSprite(l.data, doomPalette); break; } catch(e){} }
+                }
+                // Load death animation frames (up to 5)
+                for (const n of set.dead) {
+                    const l = lumpsArr.find(x => x.name === n);
+                    if (l && l.size > 8) { try { enemyDeadSprites[ei].push(parsePatchSprite(l.data, doomPalette)); } catch(e){} }
+                    if (enemyDeadSprites[ei].length >= 5) break;
+                }
+            }
+            console.log('Enemy walk frames:', enemySprites[0].length, enemySprites[1].length);
+
+            // Pre-cache all enemy sprite canvases
+            function cacheSprite(key, sprite) {
+                if (!sprite) return;
+                const tc = document.createElement('canvas');
+                tc.width = sprite.width; tc.height = sprite.height;
+                const tctx = tc.getContext('2d');
+                const id = tctx.createImageData(sprite.width, sprite.height);
+                const d32 = new Uint32Array(id.data.buffer);
+                for (let i = 0; i < sprite.pixels.length; i++) d32[i] = sprite.pixels[i];
+                tctx.putImageData(id, 0, 0);
+                enemySpriteCanvases[key] = { canvas: tc, sprite };
+            }
+            for (let ei = 0; ei < 2; ei++) {
+                for (let fi = 0; fi < enemySprites[ei].length; fi++) {
+                    cacheSprite(`walk${ei}_${fi}`, enemySprites[ei][fi]);
+                }
+                cacheSprite(`attack${ei}`, enemyAttackSprites[ei]);
+                cacheSprite(`pain${ei}`, enemyPainSprites[ei]);
+                for (let fi = 0; fi < enemyDeadSprites[ei].length; fi++) {
+                    cacheSprite(`dead${ei}_${fi}`, enemyDeadSprites[ei][fi]);
+                }
+            }
+
+            status.textContent = `Loaded: ${Object.keys(wallTextures).length} walls, ${shotgunFrames.length} shotgun, ${enemySprites[0]?'zombieman':'no enemy'}, ${hudBarSprite?'HUD':'no HUD'}`;
+            return true;
+        }
+
+        /* ── Texture assignment ────────────────────────────── */
+        function getWallTexture(mapX, mapY, side) {
+            const names = Object.keys(wallTextures);
+            if (!names.length) return null;
+            const idx = ((mapX * 7 + mapY * 13 + side * 3) & 0x7FFFFFFF) % names.length;
+            return wallTextures[names[idx]];
+        }
+
+        /* ── Helpers ───────────────────────────────────────── */
+        function isWall(map, x, y) {
+            if (x < 0 || x >= MAP_SIZE || y < 0 || y >= MAP_SIZE) return true;
+            return ((map[y] >> x) & 1) === 1;
+        }
+        function subcellToWorld(sc) { return sc / SUBCELL; }
+        function pangleToRadians(pa) { return pa * (2 * Math.PI / NUM_ANGLES) - Math.PI / 2; }
+        function randomSpawnPos() {
+            let x, y;
+            do { x = 1+Math.floor(Math.random()*6); y = 1+Math.floor(Math.random()*6); }
+            while (isWall(mapData, x, y));
+            return { x: x*SUBCELL+4, y: y*SUBCELL+4 };
+        }
+
+        /* ── AI ────────────────────────────────────────────── */
+        const AI_SHOOT_COOLDOWN = 8; // minimum ticks between AI shots
+
+        function getAICommand(gs) {
+            if (!gs) return 0;
+            let target = null, bestDist = Infinity;
+            for (const e of gs.enemies) {
+                if (e.hp <= 0) continue;
+                const d = Math.abs(e.x - gs.px) + Math.abs(e.y - gs.py);
+                if (d < bestDist) { bestDist = d; target = e; }
+            }
+            if (!target) return 1;
+            const dx = target.x - gs.px, dy = target.y - gs.py;
+            let desired = Math.round((Math.atan2(dy,dx) + Math.PI/2) / (2*Math.PI) * NUM_ANGLES) % NUM_ANGLES;
+            if (desired < 0) desired += NUM_ANGLES;
+            let diff = desired - gs.pangle;
+            if (diff > NUM_ANGLES / 2) diff -= NUM_ANGLES; if (diff < -NUM_ANGLES / 2) diff += NUM_ANGLES;
+            if (Math.abs(diff) <= 3 && bestDist < 24 && gs.ammo > 0 && (tickNum - lastShootTick) >= AI_SHOOT_COOLDOWN) return 5;
+            if (diff > 0) return 4; if (diff < 0) return 3;
+            const ma = pangleToRadians(gs.pangle);
+            if (isWall(mapData, Math.floor(subcellToWorld(gs.px)+Math.cos(ma)*0.8), Math.floor(subcellToWorld(gs.py)+Math.sin(ma)*0.8)))
+                return Math.random() < 0.5 ? 6 : 7;
+            return 1;
+        }
+
+        function getKeyboardCommand() {
+            if (keysDown.has(' ')) return 5;
+            if (keysDown.has('arrowleft')) return 3;
+            if (keysDown.has('arrowright')) return 4;
+            if (keysDown.has('w') || keysDown.has('arrowup')) return 1;
+            if (keysDown.has('s') || keysDown.has('arrowdown')) return 2;
+            if (keysDown.has('a') || keysDown.has('q')) return 6;
+            if (keysDown.has('d') || keysDown.has('e')) return 7;
+            return 0;
+        }
+
+        /* ============================================================
+         *  Raycasting Renderer (320×200 native, DOOM-style)
+         * ============================================================ */
+        function castRay(map, px, py, angle) {
+            const dx = Math.cos(angle), dy = Math.sin(angle);
+            let mapX = Math.floor(px), mapY = Math.floor(py);
+            const stepX = dx >= 0 ? 1 : -1, stepY = dy >= 0 ? 1 : -1;
+            const ddx = Math.abs(1/dx), ddy = Math.abs(1/dy);
+            let sdx = dx >= 0 ? (mapX+1-px)*ddx : (px-mapX)*ddx;
+            let sdy = dy >= 0 ? (mapY+1-py)*ddy : (py-mapY)*ddy;
+            let side = 0;
+
+            for (let i = 0; i < 64; i++) {
+                if (sdx < sdy) { sdx += ddx; mapX += stepX; side = 0; }
+                else { sdy += ddy; mapY += stepY; side = 1; }
+                if (isWall(map, mapX, mapY)) {
+                    const dist = side === 0
+                        ? (mapX - px + (1 - stepX)/2) / dx
+                        : (mapY - py + (1 - stepY)/2) / dy;
+                    let wallX = side === 0 ? py + dist*dy : px + dist*dx;
+                    wallX -= Math.floor(wallX);
+                    return { dist: Math.max(dist, 0.01), side, wallX, hitMapX: mapX, hitMapY: mapY };
+                }
+            }
+            return { dist: 10, side: 0, wallX: 0, hitMapX: 0, hitMapY: 0 };
+        }
+
+        /* Apply DOOM-like light diminishing */
+        function applyLight(color, dist, side) {
+            // DOOM uses light levels 0-255 with diminishing by distance
+            const lightLevel = Math.max(0.18, Math.min(1.0, 1.4 - dist * 0.12));
+            const sideMul = side === 1 ? 0.75 : 1.0;
+            const mul = lightLevel * sideMul;
+            const r = Math.min(255, Math.floor(( color        & 0xFF) * mul));
+            const g = Math.min(255, Math.floor(((color >>  8) & 0xFF) * mul));
+            const b = Math.min(255, Math.floor(((color >> 16) & 0xFF) * mul));
+            return (255 << 24) | (b << 16) | (g << 8) | r;
+        }
+
+        function renderViewport(map, gs) {
+            const playerX = subcellToWorld(gs.px), playerY = subcellToWorld(gs.py);
+            const baseAngle = pangleToRadians(gs.pangle);
+            const isShooting = shootTimer > 0;
+            const halfH = SCR_H / 2;
+            const depthBuf = new Float32Array(SCR_W);
+
+            // Clear to black
+            vpPixels.fill(0xFF000000);
+
+            for (let col = 0; col < NUM_RAYS; col++) {
+                const rayAngle = baseAngle + (col / NUM_RAYS - 0.5) * FOV;
+                const hit = castRay(map, playerX, playerY, rayAngle);
+                const perpDist = hit.dist * Math.cos(rayAngle - baseAngle);
+                depthBuf[col] = perpDist;
+
+                const wallH = SCR_H / perpDist;
+                const wallTop = Math.floor(halfH - wallH / 2);
+                const wallBot = Math.ceil(halfH + wallH / 2);
+
+                // ── Sky (above wall) ──
+                if (skyColumns) {
+                    // Map screen column to sky texture column (wrapping based on angle)
+                    let skyU = ((rayAngle / (2 * Math.PI)) * skyColumns.width) | 0;
+                    skyU = ((skyU % skyColumns.width) + skyColumns.width) % skyColumns.width;
+                    const yEnd = Math.min(SCR_H, Math.max(0, wallTop));
+                    for (let y = 0; y < yEnd; y++) {
+                        const skyV = Math.floor(y / SCR_H * skyColumns.height);
+                        const skyPx = skyColumns.pixels[skyV * skyColumns.width + skyU];
+                        if (skyPx) vpPixels[y * SCR_W + col] = skyPx;
+                        else vpPixels[y * SCR_W + col] = 0xFF1a1a3a; // fallback dark blue
+                    }
+                } else {
+                    // Gradient sky fallback
+                    const yEnd = Math.min(SCR_H, Math.max(0, wallTop));
+                    for (let y = 0; y < yEnd; y++) {
+                        const t = y / halfH;
+                        const r = Math.floor(30 + 20 * t);
+                        const g = Math.floor(30 + 30 * t);
+                        const b = Math.floor(60 + 80 * t);
+                        vpPixels[y * SCR_W + col] = (255 << 24) | (b << 16) | (g << 8) | r;
+                    }
+                }
+
+                // ── Textured wall ──
+                const tex = getWallTexture(hit.hitMapX, hit.hitMapY, hit.side);
+                const yStart = Math.max(0, wallTop), yEnd = Math.min(SCR_H, wallBot);
+
+                if (tex) {
+                    let texX = Math.floor(hit.wallX * tex.width) % tex.width;
+                    if (texX < 0) texX += tex.width;
+                    const texStep = tex.height / wallH;
+                    for (let y = yStart; y < yEnd; y++) {
+                        let texY = Math.floor((y - wallTop) * texStep) % tex.height;
+                        if (texY < 0) texY += tex.height;
+                        const texel = tex.pixels[texY * tex.width + texX];
+                        vpPixels[y * SCR_W + col] = texel ? applyLight(texel, perpDist, hit.side) : applyLight(0xFF808080, perpDist, hit.side);
+                    }
+                } else {
+                    const c = applyLight(0xFF808080, perpDist, hit.side);
+                    for (let y = yStart; y < yEnd; y++) vpPixels[y * SCR_W + col] = c;
+                }
+
+                // ── Textured floor ──
+                const cosA = Math.cos(rayAngle), sinA = Math.sin(rayAngle);
+                const cosCorr = Math.cos(rayAngle - baseAngle);
+                const floorFlat = flatTextures._floor;
+
+                for (let y = Math.max(wallBot, Math.floor(halfH) + 1); y < SCR_H; y++) {
+                    const rowDist = halfH / (y - halfH + 0.01);
+                    const floorX = playerX + rowDist * cosA / cosCorr;
+                    const floorY = playerY + rowDist * sinA / cosCorr;
+                    const tx = ((Math.floor(floorX * 64) % 64) + 64) % 64;
+                    const ty = ((Math.floor(floorY * 64) % 64) + 64) % 64;
+                    const texel = floorFlat[ty * 64 + tx];
+                    vpPixels[y * SCR_W + col] = applyLight(texel, rowDist * 0.8, 0);
+                }
+
+                // ── Textured ceiling (if no sky texture) ──
+                if (!skyColumns) {
+                    const ceilFlat = flatTextures._ceil;
+                    for (let y = Math.min(wallTop - 1, Math.floor(halfH) - 1); y >= 0; y--) {
+                        const rowDist = halfH / (halfH - y + 0.01);
+                        const cx = playerX + rowDist * cosA / cosCorr;
+                        const cy = playerY + rowDist * sinA / cosCorr;
+                        const tx = ((Math.floor(cx * 64) % 64) + 64) % 64;
+                        const ty = ((Math.floor(cy * 64) % 64) + 64) % 64;
+                        const texel = ceilFlat[ty * 64 + tx];
+                        vpPixels[y * SCR_W + col] = applyLight(texel, rowDist * 0.8, 0);
+                    }
+                }
+            }
+
+            // Blit pixel buffer
+            vpCtx.putImageData(vpImageData, 0, 0);
+
+            // ── Sprites (enemies, pickups) via 2D canvas ──
+            drawSprites(vpCtx, map, gs, playerX, playerY, baseAngle, depthBuf);
+
+            // ── Shotgun from WAD ──
+            drawShotgun(vpCtx);
+
+            // ── Crosshair ──
+            vpCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+            vpCtx.lineWidth = 1;
+            vpCtx.beginPath();
+            vpCtx.moveTo(SCR_W/2-5, SCR_H/2); vpCtx.lineTo(SCR_W/2-2, SCR_H/2);
+            vpCtx.moveTo(SCR_W/2+2, SCR_H/2); vpCtx.lineTo(SCR_W/2+5, SCR_H/2);
+            vpCtx.moveTo(SCR_W/2, SCR_H/2-5); vpCtx.lineTo(SCR_W/2, SCR_H/2-2);
+            vpCtx.moveTo(SCR_W/2, SCR_H/2+2); vpCtx.lineTo(SCR_W/2, SCR_H/2+5);
+            vpCtx.stroke();
+
+            // ── Hit marker ──
+            if (hitMarker > 0) {
+                vpCtx.strokeStyle = `rgba(255,40,40,${hitMarker})`;
+                vpCtx.lineWidth = 1;
+                vpCtx.beginPath();
+                vpCtx.moveTo(SCR_W/2-4, SCR_H/2-4); vpCtx.lineTo(SCR_W/2+4, SCR_H/2+4);
+                vpCtx.moveTo(SCR_W/2+4, SCR_H/2-4); vpCtx.lineTo(SCR_W/2-4, SCR_H/2+4);
+                vpCtx.stroke();
+                // hitMarker decay handled by renderLoop
+            }
+
+            // ── Damage flash ──
+            if (damageFlash > 0) {
+                vpCtx.fillStyle = `rgba(255,0,0,${damageFlash * 0.3})`;
+                vpCtx.fillRect(0, 0, SCR_W, SCR_H);
+                // damageFlash decay handled by renderLoop
+            }
+        }
+
+        /* ── Draw DOOM shotgun sprite from WAD ─────────────── */
+        /* Pre-cache shotgun sprite canvases at WAD load time */
+        let shotgunCanvases = [];
+
+        function cacheShotgunCanvases() {
+            shotgunCanvases = shotgunFrames.map(frame => {
+                const tc = document.createElement('canvas');
+                tc.width = frame.width; tc.height = frame.height;
+                const tctx = tc.getContext('2d');
+                const id = tctx.createImageData(frame.width, frame.height);
+                const d32 = new Uint32Array(id.data.buffer);
+                for (let i = 0; i < frame.pixels.length; i++) d32[i] = frame.pixels[i];
+                tctx.putImageData(id, 0, 0);
+                return tc;
+            });
+        }
+
+        function drawShotgun(ctx) {
+            const isShooting = shootTimer > 0;
+            if (shotgunFrames.length === 0) { drawFallbackWeapon(ctx, isShooting); return; }
+
+            // Cycle through all shotgun frames during shooting animation
+            let frameIdx = 0;
+            if (isShooting) {
+                const elapsed = SHOOT_RENDER_FRAMES - shootTimer;
+                if (elapsed < 6) frameIdx = Math.min(1, shotgunFrames.length - 1);
+                else if (elapsed < 14) frameIdx = Math.min(2, shotgunFrames.length - 1);
+                else frameIdx = Math.min(3, shotgunFrames.length - 1);
+            }
+
+            const frame = shotgunFrames[frameIdx];
+            const tc = shotgunCanvases[frameIdx];
+            if (!frame || !tc) { drawFallbackWeapon(ctx, isShooting); return; }
+
+            const bob = Math.sin(renderFrame * 0.08) * 1;
+            const kick = (isShooting && shootTimer > SHOOT_RENDER_FRAMES - 6) ? -3 : 0;
+            const dx = (SCR_W / 2) - (frame.width / 2);
+            const dy = SCR_H - frame.height + bob + kick;
+
+            ctx.drawImage(tc, dx, dy, frame.width, frame.height);
+
+            // Muzzle flash only during first few frames of shooting
+            if (isShooting && shootTimer > SHOOT_RENDER_FRAMES - 4) {
+                const flashX = SCR_W / 2;
+                const flashY = dy + 10;
+                const grad = ctx.createRadialGradient(flashX, flashY, 0, flashX, flashY, 20);
+                grad.addColorStop(0, 'rgba(255,240,150,0.8)');
+                grad.addColorStop(0.3, 'rgba(255,180,50,0.5)');
+                grad.addColorStop(1, 'rgba(255,100,0,0)');
+                ctx.fillStyle = grad;
+                ctx.fillRect(flashX - 25, flashY - 20, 50, 30);
+            }
+        }
+
+        function drawFallbackWeapon(ctx, isShooting) {
+            const bob = Math.sin(renderFrame * 0.06) * 1;
+            const baseX = SCR_W / 2, baseY = SCR_H * 0.72 + bob + (isShooting ? -6 : 0);
+            ctx.save();
+            if (isShooting) {
+                const fg = ctx.createRadialGradient(baseX, baseY-15, 1, baseX, baseY-15, 18);
+                fg.addColorStop(0, 'rgba(255,240,150,0.9)'); fg.addColorStop(1, 'rgba(255,100,0,0)');
+                ctx.fillStyle = fg; ctx.fillRect(baseX-20, baseY-32, 40, 25);
+            }
+            ctx.fillStyle = '#3a3a3a'; ctx.fillRect(baseX-3, baseY-20, 6, 25);
+            ctx.fillStyle = '#2a2a2a';
+            ctx.beginPath();
+            ctx.moveTo(baseX-13, baseY+5); ctx.lineTo(baseX+13, baseY+5);
+            ctx.lineTo(baseX+11, baseY+18); ctx.lineTo(baseX+5, baseY+30);
+            ctx.lineTo(baseX-5, baseY+30); ctx.lineTo(baseX-11, baseY+18);
+            ctx.closePath(); ctx.fill();
+            ctx.restore();
+        }
+
+        /* ── Draw sprite with per-column depth clipping ───── */
+        function drawSpriteClipped(ctx, tc, sprite, drawX, drawY, drawW, drawH, dist, depthBuf, alpha) {
+            const colStart = Math.max(0, Math.floor(drawX));
+            const colEnd = Math.min(SCR_W, Math.ceil(drawX + drawW));
+            if (colStart >= colEnd) return;
+
+            ctx.save();
+            ctx.globalAlpha = alpha;
+
+            let stripStart = -1;
+            for (let col = colStart; col <= colEnd; col++) {
+                const vis = col < colEnd && dist < (depthBuf[col] || 999);
+                if (vis && stripStart < 0) stripStart = col;
+                if (!vis && stripStart >= 0) {
+                    const sx = Math.max(0, (stripStart - drawX) / drawW * sprite.width);
+                    const sw = Math.max(0.5, (col - stripStart) / drawW * sprite.width);
+                    ctx.drawImage(tc, sx, 0, sw, sprite.height, stripStart, drawY, col - stripStart, drawH);
+                    stripStart = -1;
+                }
+            }
+
+            ctx.restore();
+        }
+
+        /* ── Draw sprites ──────────────────────────────────── */
+        function drawSprites(ctx, map, gs, playerX, playerY, baseAngle, depthBuf) {
+            const sprites = [];
+            gs.enemies.forEach((e, i) => {
+                const ex = subcellToWorld(e.x), ey = subcellToWorld(e.y);
+                if (e.hp > 0) {
+                    sprites.push({ x: ex, y: ey, type: 'enemy', hp: e.hp, idx: i, attacking: enemyAttackTimers[i] > 0, inPain: enemyPainTimers[i] > 0 });
+                } else if (enemyDeathTimers[i] > 0) {
+                    sprites.push({ x: ex, y: ey, type: 'dead', idx: i });
+                }
+            });
+
+            sprites.forEach(s => { s.dist = Math.sqrt((s.x-playerX)**2 + (s.y-playerY)**2); });
+            sprites.sort((a, b) => b.dist - a.dist);
+
+            for (const s of sprites) {
+                let ang = Math.atan2(s.y - playerY, s.x - playerX) - baseAngle;
+                while (ang > Math.PI) ang -= 2*Math.PI;
+                while (ang < -Math.PI) ang += 2*Math.PI;
+                if (Math.abs(ang) > FOV/2 + 0.2) continue;
+
+                const sx = (0.5 + ang / FOV) * SCR_W;
+                const sh = Math.min(SCR_H, SCR_H / s.dist * 0.85);
+                const sw = sh * 0.6;
+                const sy = SCR_H / 2 - sh / 2;
+
+                // Quick visibility check: is any column in front of walls?
+                const sx0 = Math.floor(sx - sw/2), sx1 = Math.floor(sx + sw/2);
+                let vis = false;
+                for (let c = Math.max(0, sx0); c < Math.min(SCR_W, sx1); c++) {
+                    if (s.dist < depthBuf[c]) { vis = true; break; }
+                }
+                if (!vis) continue;
+
+                if (s.type === 'enemy') {
+                    drawWADSprite(ctx, sx, sy, sh, sw, s.dist, s.idx, s.attacking, s.inPain, depthBuf);
+                } else if (s.type === 'dead') {
+                    drawWADSpriteDead(ctx, sx, sy, sh, sw, s.dist, s.idx, depthBuf);
+                }
+            }
+        }
+
+        /* Draw enemy using WAD sprite, depth-clipped and animated */
+        function drawWADSprite(ctx, cx, cy, sh, sw, dist, idx, attacking, inPain, depthBuf) {
+            let cached;
+            if (inPain) cached = enemySpriteCanvases[`pain${idx}`];
+            if (!cached && attacking) cached = enemySpriteCanvases[`attack${idx}`];
+            if (!cached) {
+                const walkFrames = enemySprites[idx] ? enemySprites[idx].length : 0;
+                if (walkFrames > 0) {
+                    const fi = Math.floor(renderFrame / 10) % walkFrames;
+                    cached = enemySpriteCanvases[`walk${idx}_${fi}`];
+                }
+            }
+            if (!cached) {
+                const shade = Math.max(0.25, 1 - dist / 7);
+                ctx.fillStyle = `rgba(${Math.floor(60*shade)},${Math.floor(100*shade)},${Math.floor(60*shade)},0.9)`;
+                ctx.fillRect(cx-sw*0.3, cy+sh*0.15, sw*0.6, sh*0.7);
+                return;
+            }
+            const { canvas: tc, sprite } = cached;
+            const aspect = sprite.width / sprite.height;
+            const drawH = sh * 0.85;
+            const drawW = drawH * aspect;
+            const drawX = cx - drawW / 2;
+            const drawY = cy + sh - drawH;
+
+            const shade = Math.max(0.2, Math.min(1.0, 1.4 - dist * 0.12));
+            drawSpriteClipped(ctx, tc, sprite, drawX, drawY, drawW, drawH, dist, depthBuf, shade);
+        }
+
+        function drawWADSpriteDead(ctx, cx, cy, sh, sw, dist, idx, depthBuf) {
+            const numFrames = enemyDeadSprites[idx] ? enemyDeadSprites[idx].length : 0;
+            if (numFrames === 0) {
+                const shade = Math.max(0.3, 1 - dist / 8);
+                ctx.fillStyle = `rgba(${Math.floor(80*shade)},${Math.floor(20*shade)},${Math.floor(20*shade)},0.6)`;
+                ctx.fillRect(cx-sw*0.3, cy+sh*0.78, sw*0.6, sh*0.06);
+                return;
+            }
+            // Animate: map DEATH_TICKS countdown to frame index
+            const timer = enemyDeathTimers[idx];
+            const progress = 1 - timer / DEATH_RENDER_FRAMES; // 0 at start, ~1 at end
+            const fi = Math.min(numFrames - 1, Math.floor(progress * numFrames));
+            const cached = enemySpriteCanvases[`dead${idx}_${fi}`];
+            if (!cached) return;
+            const { canvas: tc, sprite } = cached;
+            // Use a fixed reference width (same as walk sprite) so later wide
+            // corpse frames don't blow up. Scale height to match aspect.
+            const maxW = sh * 0.85 * 0.6;  // same width budget as walk sprites
+            const aspect = sprite.width / sprite.height;
+            let drawW = maxW;
+            let drawH = drawW / aspect;
+            // For early upright frames, cap height to walk-sprite size
+            if (drawH > sh * 0.85) { drawH = sh * 0.85; drawW = drawH * aspect; }
+            const drawX = cx - drawW / 2;
+            const drawY = cy + sh - drawH;
+            const shade = Math.max(0.2, Math.min(1.0, 1.4 - dist * 0.12));
+            drawSpriteClipped(ctx, tc, sprite, drawX, drawY, drawW, drawH, dist, depthBuf, shade);
+        }
+
+        /* ── DOOM HUD (status bar from WAD) ────────────────── */
+        function renderHUDBar(gs) {
+            hudCtx.fillStyle = '#4b4b4b';
+            hudCtx.fillRect(0, 0, 320, 32);
+
+            // Draw STBAR background if available
+            if (hudBarSprite) {
+                const id = hudCtx.createImageData(hudBarSprite.width, hudBarSprite.height);
+                const d32 = new Uint32Array(id.data.buffer);
+                for (let i = 0; i < hudBarSprite.pixels.length; i++) {
+                    d32[i] = hudBarSprite.pixels[i] || d32[i];
+                }
+                hudCtx.putImageData(id, 0, 0, 0, 0, 320, 32);
+            }
+
+            // Draw numbers using STTNUM sprites — positions match DOOM STBAR layout
+            drawHUDNumber(Math.floor(gs.ammo), -10, 1);            // Ammo (left recessed area)
+            drawHUDNumber(Math.floor(gs.hp / HP_MAX * 100), 50, 1); // Health %
+            // Draw face
+            if (hudFaces.length > 0) {
+                const faceIdx = gs.hp <= 2 ? 3 : (gs.hp <= 4 ? 2 : (isFaceOuch ? 5 : (tickNum % 30 < 10 ? 0 : tickNum % 30 < 20 ? 1 : 2)));
+                const face = hudFaces[Math.min(faceIdx, hudFaces.length - 1)];
+                if (face) {
+                    const tc = document.createElement('canvas');
+                    tc.width = face.width; tc.height = face.height;
+                    const tctx = tc.getContext('2d');
+                    const fid = tctx.createImageData(face.width, face.height);
+                    const fd32 = new Uint32Array(fid.data.buffer);
+                    for (let i = 0; i < face.pixels.length; i++) fd32[i] = face.pixels[i];
+                    tctx.putImageData(fid, 0, 0);
+                    hudCtx.drawImage(tc, 143, 0, 34, 32);
+                }
+            }
+            drawHUDNumber(totalKills, 88, 1);                    // Armor/kills (right recessed area)
+
+            // Percent sign (after 3 health digits at x=52, each ~14px wide → 52+42=94)
+            if (hudNumbers[10]) {
+                // drawHUDSprite(hudNumbers[10], 94, 1);
+            }
+
+            // Tick info
+            hudCtx.fillStyle = '#808080';
+            hudCtx.font = '6px monospace';
+            hudCtx.fillText(`TICK ${tickNum}`, 280, 28);
+        }
+
+        let isFaceOuch = false;
+
+        function drawHUDNumber(value, x, y) {
+            y = y + 2;
+            const str = String(Math.max(0, Math.min(999, Math.abs(value))));
+            const digits = str.padStart(3, ' ').split('');
+            let dx = x;
+            for (const ch of digits) {
+                if (ch === ' ') { dx += 14; continue; }
+                const digit = parseInt(ch);
+                const sprite = hudNumbers[digit];
+                if (sprite) {
+                    drawHUDSprite(sprite, dx, y);
+                    dx += sprite.width;
+                } else {
+                    // Fallback: draw digit with canvas
+                    hudCtx.fillStyle = '#c00';
+                    hudCtx.font = 'bold 14px monospace';
+                    hudCtx.fillText(ch, dx + 2, y + 14);
+                    dx += 14;
+                }
+            }
+        }
+
+        function drawHUDSprite(sprite, x, y) {
+            const tc = document.createElement('canvas');
+            tc.width = sprite.width; tc.height = sprite.height;
+            const tctx = tc.getContext('2d');
+            const id = tctx.createImageData(sprite.width, sprite.height);
+            const d32 = new Uint32Array(id.data.buffer);
+            for (let i = 0; i < sprite.pixels.length; i++) d32[i] = sprite.pixels[i];
+            tctx.putImageData(id, 0, 0);
+            hudCtx.drawImage(tc, x, y);
+        }
+
+        /* ── Minimap ───────────────────────────────────────── */
+        function renderMinimap(map, gs) {
+            const cs = MINIMAP_SIZE / MAP_SIZE;
+            mmCtx.fillStyle = '#1a1a2e';
+            mmCtx.fillRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+            for (let y = 0; y < MAP_SIZE; y++) {
+                for (let x = 0; x < MAP_SIZE; x++) {
+                    if (isWall(map, x, y)) {
+                        mmCtx.fillStyle = '#4a4a5a';
+                        mmCtx.fillRect(x*cs, y*cs, cs-0.5, cs-0.5);
+                    }
+                }
+            }
+            for (const e of gs.enemies) {
+                if (e.hp > 0) {
+                    mmCtx.fillStyle = '#ef4444';
+                    mmCtx.beginPath();
+                    mmCtx.arc(subcellToWorld(e.x)*cs, subcellToWorld(e.y)*cs, 3, 0, Math.PI*2);
+                    mmCtx.fill();
+                }
+            }
+            if (gs.pickup && gs.pickup.active) {
+                mmCtx.fillStyle = gs.pickup.ptype === 1 ? '#f87171' : '#fbbf24';
+                mmCtx.fillRect(subcellToWorld(gs.pickup.x)*cs-2, subcellToWorld(gs.pickup.y)*cs-2, 4, 4);
+            }
+            const pmx = subcellToWorld(gs.px)*cs, pmy = subcellToWorld(gs.py)*cs;
+            const angle = pangleToRadians(gs.pangle);
+            mmCtx.fillStyle = '#3b82f6';
+            mmCtx.beginPath(); mmCtx.arc(pmx, pmy, 4, 0, Math.PI*2); mmCtx.fill();
+            mmCtx.strokeStyle = 'rgba(59,130,246,0.4)'; mmCtx.lineWidth = 1;
+            mmCtx.beginPath();
+            mmCtx.moveTo(pmx, pmy); mmCtx.lineTo(pmx+Math.cos(angle-FOV/2)*15, pmy+Math.sin(angle-FOV/2)*15);
+            mmCtx.moveTo(pmx, pmy); mmCtx.lineTo(pmx+Math.cos(angle+FOV/2)*15, pmy+Math.sin(angle+FOV/2)*15);
+            mmCtx.stroke();
+            if (aiEnabled) { mmCtx.fillStyle = 'rgba(16,185,129,0.8)'; mmCtx.font = '10px monospace'; mmCtx.fillText('AI', 4, 12); }
+        }
+
+        /* ── State reading ─────────────────────────────────── */
+        function readGameStateISA() {
+            const v = compileResult.meta.variables;
+            const mem = isaInterpreter;
+            return {
+                px: mem.readVar(v.px), py: mem.readVar(v.py),
+                pangle: mem.readVar(v.pangle), hp: mem.readVar(v.hp),
+                ammo: mem.readVar(v.ammo), score: mem.readVar(v.score),
+                gameover: mem.readVar(v.gameover), tick: mem.readVar(v.tick),
+                enemies: [
+                    { x: mem.readVar(v.ex0), y: mem.readVar(v.ey0), hp: mem.readVar(v.ehp0) },
+                    { x: mem.readVar(v.ex1), y: mem.readVar(v.ey1), hp: mem.readVar(v.ehp1) },
+                ],
+                pickup: {
+                    x: mem.readVar(v.pkx), y: mem.readVar(v.pky),
+                    ptype: mem.readVar(v.pktype), active: mem.readVar(v.pkactive),
+                },
+            };
+        }
+
+        function writeGameStateISA(gs) {
+            const v = compileResult.meta.variables;
+            const mem = isaInterpreter;
+            const mv = MAPS[currentMap];
+            for (let i = 0; i < MAP_SIZE; i++) mem.writeVar(v.map + i, mv[i]);
+            mem.writeVar(v.px, gs.px);
+            mem.writeVar(v.py, gs.py);
+            mem.writeVar(v.pangle, gs.pangle);
+            mem.writeVar(v.hp, gs.hp);
+            mem.writeVar(v.ammo, gs.ammo);
+            mem.writeVar(v.score, gs.score);
+            mem.writeVar(v.gameover, gs.gameover);
+            mem.writeVar(v.tick, gs.tick);
+            mem.writeVar(v.ex0, gs.enemies[0].x);
+            mem.writeVar(v.ey0, gs.enemies[0].y);
+            mem.writeVar(v.ehp0, gs.enemies[0].hp);
+            mem.writeVar(v.ex1, gs.enemies[1].x);
+            mem.writeVar(v.ey1, gs.enemies[1].y);
+            mem.writeVar(v.ehp1, gs.enemies[1].hp);
+            mem.writeVar(v.pkx, gs.pickup.x);
+            mem.writeVar(v.pky, gs.pickup.y);
+            mem.writeVar(v.pktype, gs.pickup.ptype);
+            mem.writeVar(v.pkactive, gs.pickup.active);
+        }
+
+        function readGameState() {
+            if (useISA && isaInterpreter) return readGameStateISA();
+            if (!state || !config || !programInfo) return null;
+            const v = programInfo.variables;
+            return {
+                px: readMemory(state, config, v.px), py: readMemory(state, config, v.py),
+                pangle: readMemory(state, config, v.pangle), hp: readMemory(state, config, v.hp),
+                ammo: readMemory(state, config, v.ammo), score: readMemory(state, config, v.score),
+                gameover: readMemory(state, config, v.gameover), tick: readMemory(state, config, v.tick),
+                enemies: [
+                    { x: readMemory(state,config,v.ex0), y: readMemory(state,config,v.ey0), hp: readMemory(state,config,v.ehp0) },
+                    { x: readMemory(state,config,v.ex1), y: readMemory(state,config,v.ey1), hp: readMemory(state,config,v.ehp1) },
+                ],
+                pickup: {
+                    x: readMemory(state,config,v.pkx), y: readMemory(state,config,v.pky),
+                    ptype: readMemory(state,config,v.pktype), active: readMemory(state,config,v.pkactive),
+                },
+            };
+        }
+
+        /* ── Animated step-by-step execution ───────────────── */
+        async function runTickAnimated(inputState, config, maxSteps) {
+            const stateCanvas = document.getElementById('stateCanvas');
+            const stepCounter = document.getElementById('stepCounter');
+            let curState = new Float32Array(inputState);
+            let steps = 0;
+            const t0 = performance.now();
+
+            while (steps < maxSteps) {
+                const pc = getPC(curState, config);
+                if (pc === 0 && steps > 0) break;
+
+                curState = await runStep(curState, config);
+                steps++;
+
+                // Update visuals every step (or every few steps for speed)
+                if (steps % 1 === 0) {
+                    _currentState = curState;
+                    renderHeatmap(stateCanvas, curState, config);
+                    stepCounter.textContent = `Step ${steps} · PC=${getPC(curState, config)}`;
+                    await new Promise(r => setTimeout(r, stepDelay));
+                }
+            }
+
+            stepCounter.textContent = '';
+            return { state: curState, steps, halted: true, ms: performance.now() - t0 };
+        }
+
+        /* ── Trimmed inference for faster ticks ────────────── */
+        async function runTickTrimmed(inputState, maxSteps) {
+            if (!useTrimming || !nTrimmed || nTrimmed >= config.n) {
+                return stepMode
+                    ? await runTickAnimated(inputState, config, maxSteps)
+                    : await runUntilStopFast(inputState, config, maxSteps);
+            }
+
+            try {
+                const d = config.d_model, n = config.n, nt = nTrimmed;
+                const logn = config.logn;
+                const t0 = performance.now();
+                let steps = 0;
+
+                // Trim: keep only the first nt columns from each row
+                const trimmed = new Float32Array(d * nt);
+                for (let r = 0; r < d; r++) {
+                    trimmed.set(inputState.subarray(r * n, r * n + nt), r * nt);
+                }
+
+                const pcOffsets = new Array(logn);
+                for (let i = 0; i < logn; i++) pcOffsets[i] = (config.idx_pc + i) * nt;
+
+                const tensor = new ort.Tensor('float32', trimmed, [d, nt]);
+
+                while (steps < maxSteps) {
+                    let pc = 0;
+                    for (let i = 0; i < logn; i++) {
+                        if (trimmed[pcOffsets[i]] > 0) pc |= (1 << (logn - 1 - i));
+                    }
+                    if (pc === 0) break;
+
+                    const results = await _onnxSession.run({ state: tensor });
+                    trimmed.set(results.new_state.data);
+                    steps++;
+                }
+
+                // Expand back to full-size state
+                const output = new Float32Array(inputState);
+                for (let r = 0; r < d; r++) {
+                    output.set(trimmed.subarray(r * nt, r * nt + nt), r * n);
+                }
+
+                return { state: output, steps, halted: true, ms: performance.now() - t0 };
+            } catch (e) {
+                console.warn('Trimmed inference failed, using full tensor:', e);
+                useTrimming = false;
+                return await runUntilStopFast(inputState, config, maxSteps);
+            }
+        }
+
+        /* ── ISA interpreter tick ──────────────────────────── */
+        function runTickISA(cmd) {
+            const v = compileResult.meta.variables;
+            isaInterpreter.writeVar(v.cmd, cmd);
+            isaInterpreter.resetPC();
+            const t0 = performance.now();
+            const result = isaInterpreter.run(5000);
+            result.ms = performance.now() - t0;
+            return result;
+        }
+
+        /* ── Game tick ─────────────────────────────────────── */
+        async function runTick(cmd) {
+            if (tickInProgress) return;
+            if (useISA && !isaInterpreter) return;
+            if (!useISA && (!state || !config || !programInfo)) return;
+            tickInProgress = true;
+
+            const wasShooting = (cmd === 5);
+            setStatus('running', `Tick ${tickNum + 1}...`);
+            const tickStart = performance.now();
+
+            let result;
+            const v = !useISA ? programInfo.variables : null;
+            if (useISA) {
+                result = runTickISA(cmd);
+            } else {
+                writeMemory(state, config, v.cmd, cmd);
+                result = await runTickTrimmed(state, 5000);
+                state = result.state;
+                _currentState = state;
+            }
+
+            totalSteps += result.steps;
+            tickNum++;
+
+            const tickMs = performance.now() - tickStart;
+            document.getElementById('tickInfo').textContent = `Tick ${tickNum} · ${tickMs.toFixed(0)}ms`;
+
+            const gs = readGameState();
+
+            if (gs.hp < prevHp) {
+                damageFlash = 1; isFaceOuch = true; setTimeout(() => isFaceOuch = false, 500);
+                // Show attack animation on the closest alive enemy
+                let closestIdx = -1, closestDist = Infinity;
+                for (let i = 0; i < 2; i++) {
+                    if (gs.enemies[i].hp > 0) {
+                        const d = Math.abs(gs.enemies[i].x - gs.px) + Math.abs(gs.enemies[i].y - gs.py);
+                        if (d < closestDist) { closestDist = d; closestIdx = i; }
+                    }
+                }
+                if (closestIdx >= 0) enemyAttackTimers[closestIdx] = ATTACK_RENDER_FRAMES;
+            }
+            prevHp = gs.hp;
+
+            const curEhp = [gs.enemies[0].hp, gs.enemies[1].hp];
+            if (curEhp[0] < prevEhp[0] || curEhp[1] < prevEhp[1]) hitMarker = 1;
+
+            // Pain/death tracking per enemy
+            for (let i = 0; i < 2; i++) {
+                if (curEhp[i] < prevEhp[i] && curEhp[i] > 0) {
+                    enemyPainTimers[i] = PAIN_RENDER_FRAMES;
+                }
+            }
+
+            // Death tracking: start death timer when enemy dies
+            for (let i = 0; i < 2; i++) {
+                if (prevEhp[i] > 0 && curEhp[i] <= 0) {
+                    totalKills++;
+                    enemyDeathTimers[i] = DEATH_RENDER_FRAMES;
+                    deadEnemyPos[i] = { x: gs.enemies[i].x, y: gs.enemies[i].y };
+                }
+            }
+            prevEhp = [...curEhp];
+
+            // Fix enemy wall collisions
+            for (let i = 0; i < 2; i++) {
+                const e = gs.enemies[i];
+                if (e.hp <= 0) continue;
+                const cellX = Math.floor(subcellToWorld(e.x));
+                const cellY = Math.floor(subcellToWorld(e.y));
+                if (isWall(mapData, cellX, cellY)) {
+                    const sp = randomSpawnPos();
+                    e.x = sp.x; e.y = sp.y;
+                }
+            }
+
+            // Respawn: delay while death animation plays (timer is render-frame based)
+            for (let i = 0; i < 2; i++) {
+                if (gs.enemies[i].hp <= 0) {
+                    if (enemyDeathTimers[i] > 0) {
+                        gs.enemies[i] = { x: deadEnemyPos[i].x, y: deadEnemyPos[i].y, hp: 0 };
+                    } else {
+                        const sp = randomSpawnPos();
+                        gs.enemies[i] = { x: sp.x, y: sp.y, hp: 3 }; prevEhp[i] = 3;
+                    }
+                }
+            }
+            if (!gs.pickup.active) {
+                const sp = randomSpawnPos();
+                gs.pickup = { x: sp.x, y: sp.y, ptype: Math.random() < 0.5 ? 1 : 2, active: 1 };
+            }
+            if (gs.gameover || gs.hp < 1) {
+                const sp = randomSpawnPos();
+                gs.px = sp.x; gs.py = sp.y; gs.pangle = Math.floor(Math.random() * NUM_ANGLES);
+                gs.hp = HP_MAX; gs.gameover = 0; gs.ammo = Math.max(gs.ammo, 99); damageFlash = 1;
+            }
+
+            // Reload state with updated game values
+            if (useISA) {
+                writeGameStateISA(gs);
+            } else {
+                const freshState = copyState(initialState);
+                const mv = MAPS[currentMap];
+                for (let i = 0; i < MAP_SIZE; i++) writeMemory(freshState, config, v.map + i, mv[i]);
+                writeMemory(freshState, config, v.px, gs.px);
+                writeMemory(freshState, config, v.py, gs.py);
+                writeMemory(freshState, config, v.pangle, gs.pangle);
+                writeMemory(freshState, config, v.hp, gs.hp);
+                writeMemory(freshState, config, v.ammo, gs.ammo);
+                writeMemory(freshState, config, v.score, gs.score);
+                writeMemory(freshState, config, v.gameover, gs.gameover);
+                writeMemory(freshState, config, v.tick, gs.tick);
+                writeMemory(freshState, config, v.ex0, gs.enemies[0].x);
+                writeMemory(freshState, config, v.ey0, gs.enemies[0].y);
+                writeMemory(freshState, config, v.ehp0, gs.enemies[0].hp);
+                writeMemory(freshState, config, v.ex1, gs.enemies[1].x);
+                writeMemory(freshState, config, v.ey1, gs.enemies[1].y);
+                writeMemory(freshState, config, v.ehp1, gs.enemies[1].hp);
+                writeMemory(freshState, config, v.pkx, gs.pickup.x);
+                writeMemory(freshState, config, v.pky, gs.pickup.y);
+                writeMemory(freshState, config, v.pktype, gs.pickup.ptype);
+                writeMemory(freshState, config, v.pkactive, gs.pickup.active);
+                state = freshState;
+                _currentState = state;
+            }
+
+            // Start shotgun animation now that the tick result is visible
+            if (wasShooting) { lastShootTick = tickNum; shootTimer = SHOOT_RENDER_FRAMES; }
+
+            // Update latestGs for the render loop (rendering is now decoupled)
+            latestGs = gs;
+            if (!useISA && state && config) {
+                renderHeatmap(document.getElementById('stateCanvas'), state, config);
+            }
+
+            updateStat('statSteps', result.steps);
+            updateStat('statTotal', totalSteps);
+            const msPerStep = result.steps > 0 ? (result.ms / result.steps).toFixed(1) : '0';
+            updateStat('statMs', msPerStep);
+            const modeLabel = useISA ? 'ISA' : 'ONNX';
+            setStatus('done', `${modeLabel} · Tick ${tickNum} (${result.steps} steps, ${tickMs.toFixed(0)}ms)`);
+            tickInProgress = false;
+        }
+
+        /* ── 60fps render loop (decoupled from tick) ──────── */
+        function renderLoop() {
+            renderFrame++;
+            if (shootTimer > 0) shootTimer--;
+            if (damageFlash > 0) damageFlash = Math.max(0, damageFlash - 0.02);
+            if (hitMarker > 0) hitMarker = Math.max(0, hitMarker - 0.04);
+            for (let i = 0; i < 2; i++) {
+                if (enemyAttackTimers[i] > 0) enemyAttackTimers[i]--;
+                if (enemyPainTimers[i] > 0) enemyPainTimers[i]--;
+                if (enemyDeathTimers[i] > 0) enemyDeathTimers[i]--;
+            }
+
+            if (latestGs) {
+                // Smooth interpolation for player position and angle
+                const smooth = 0.25;
+                displayPx += (latestGs.px - displayPx) * smooth;
+                displayPy += (latestGs.py - displayPy) * smooth;
+
+                let angleDiff = latestGs.pangle - displayAngle;
+                if (angleDiff > NUM_ANGLES / 2) angleDiff -= NUM_ANGLES;
+                if (angleDiff < -NUM_ANGLES / 2) angleDiff += NUM_ANGLES;
+                displayAngle += angleDiff * smooth;
+                if (displayAngle < 0) displayAngle += NUM_ANGLES;
+                if (displayAngle >= NUM_ANGLES) displayAngle -= NUM_ANGLES;
+
+                const renderGs = {
+                    ...latestGs,
+                    px: displayPx,
+                    py: displayPy,
+                    pangle: displayAngle
+                };
+
+                renderViewport(mapData, renderGs);
+                renderMinimap(mapData, renderGs);
+                renderHUDBar(renderGs);
+            }
+
+            requestAnimationFrame(renderLoop);
+        }
+
+        /* ── Tick loop (runs transformer, decoupled from rendering) */
+        async function tickLoop() {
+            if (!gameRunning) return;
+            let cmd = aiEnabled ? getAICommand(latestGs || readGameState()) : getKeyboardCommand();
+            await runTick(cmd);
+            if (gameRunning) setTimeout(tickLoop, useISA ? 100 : 0);
+        }
+
+        /* ── Input ─────────────────────────────────────────── */
+        document.addEventListener('keydown', (e) => {
+            if (!gameRunning) return;
+            const k = e.key.toLowerCase();
+            if (['w','a','s','d','q','e','arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) {
+                e.preventDefault(); keysDown.add(k);
+            }
+        });
+        document.addEventListener('keyup', (e) => { keysDown.delete(e.key.toLowerCase()); });
+        vpCanvas.addEventListener('click', () => vpCanvas.focus());
+        vpCanvas.setAttribute('tabindex', '0');
+
+        document.querySelectorAll('.map-btn[data-map]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.map-btn[data-map]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentMap = btn.dataset.map;
+                mapData = MAPS[currentMap];
+            });
+        });
+        document.getElementById('aiBtn').addEventListener('click', function() {
+            aiEnabled = !aiEnabled;
+            this.textContent = aiEnabled ? 'Player AI On, recommended' : 'Player AI Off';
+            this.classList.toggle('active', aiEnabled);
+        });
+        document.getElementById('modeBtn').addEventListener('click', function() {
+            useISA = !useISA;
+            if (useISA) {
+                this.textContent = 'ISA Interpreter';
+                this.style.background = '#10b981'; this.style.borderColor = '#10b981'; this.style.color = '#fff';
+                updateStat('statBackend', 'ISA');
+                // Sync ONNX state → ISA memory
+                if (isaInterpreter && state && config) {
+                    isaInterpreter.syncFromState(state, config);
+                }
+            } else {
+                this.textContent = 'ONNX Transformer';
+                this.style.background = '#3b82f6'; this.style.borderColor = '#3b82f6'; this.style.color = '#fff';
+                updateStat('statBackend', 'ONNX');
+                // Sync ISA memory → ONNX state
+                if (isaInterpreter && state && config) {
+                    isaInterpreter.syncToState(state, config);
+                }
+            }
+        });
+        document.getElementById('stepModeBtn').addEventListener('click', function() {
+            stepMode = !stepMode;
+            this.textContent = stepMode ? 'Step View On' : 'Step View';
+            this.classList.toggle('active', stepMode);
+            document.getElementById('stepCounter').style.display = stepMode ? '' : 'none';
+        });
+
+        /* ── WAD upload (fallback) ─────────────────────────── */
+        document.getElementById('wadFile').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try { await loadWAD(file); await initGame(); }
+            catch (err) { document.getElementById('wadLoadStatus').textContent = 'Error: ' + err.message; console.error(err); }
+        });
+
+        /* ── Auto-load doom1.wad ──────────────────────────── */
+        (async function autoLoad() {
+            const status = document.getElementById('wadLoadStatus');
+            try {
+                status.textContent = 'Fetching doom1.wad...';
+                const resp = await fetch('doom1.wad');
+                if (!resp.ok) throw new Error('doom1.wad not found (' + resp.status + ')');
+                const ab = await resp.arrayBuffer();
+                await loadWAD(ab);
+                await initGame();
+            } catch (err) {
+                status.textContent = 'Could not auto-load doom1.wad. Please upload a WAD file manually.';
+                console.warn('Auto-load failed:', err);
+            }
+        })();
+
+        /* ── Init ──────────────────────────────────────────── */
+        async function initGame() {
+            const status = document.getElementById('wadLoadStatus');
+
+            // Load program info (contains C source)
+            status.textContent = 'Loading game program...';
+            const info = await fetch('programs/wolfenstein_info.json').then(r => r.json());
+            programInfo = info;
+            cSource = info.source;
+
+            // Compile C source in-browser
+            status.textContent = 'Compiling C source...';
+            const cfg = info.config;
+            compileResult = compileC(cSource, cfg.s, cfg.m, cfg.n, cfg.N);
+            config = compileResult.config;
+            _currentConfig = config;
+            console.log(`Compiled: ${compileResult.commands.length} instructions (Python: ${info.num_instructions})`);
+
+            // Create ISA interpreter
+            isaInterpreter = createInterpreter(compileResult);
+
+            // Set initial game state in ISA interpreter
+            const iv = compileResult.meta.variables;
+            const mv = MAPS[currentMap];
+            for (let i = 0; i < MAP_SIZE; i++) isaInterpreter.writeVar(iv.map + i, mv[i]);
+            if (info.initial_state) {
+                for (const [key, val] of Object.entries(info.initial_state)) {
+                    if (iv[key] !== undefined) isaInterpreter.writeVar(iv[key], val);
+                }
+            }
+            isaInterpreter.writeVar(iv.ammo, 99);
+
+            // Also set up ONNX path: build state tensor from compile result + load model
+            status.textContent = 'Loading ONNX model (for verification)...';
+            const [backend, _] = await Promise.all([
+                loadONNXModel('programs/argmax_155x1024.onnx'),
+                Promise.resolve(),
+            ]);
+            updateStat('statBackend', useISA ? 'ISA' : backend);
+
+            // Build initial state tensor for ONNX mode
+            initialState = buildStateTensor(compileResult);
+            const onnxVars = compileResult.meta.variables;
+            for (let i = 0; i < MAP_SIZE; i++) writeMemory(initialState, config, onnxVars.map + i, mv[i]);
+            if (info.initial_state) {
+                for (const [key, val] of Object.entries(info.initial_state)) {
+                    if (onnxVars[key] !== undefined) writeMemory(initialState, config, onnxVars[key], val);
+                }
+            }
+            writeMemory(initialState, config, onnxVars.ammo, 99);
+
+            // Compute trimmed tensor size
+            nTrimmed = config.s + config.m + compileResult.commands.length + 16;
+            nTrimmed = Math.min(config.n, Math.ceil(nTrimmed / 8) * 8);
+            console.log(`State tensor trimming: ${config.n} → ${nTrimmed} columns`);
+
+            state = copyState(initialState); _currentState = state;
+            document.getElementById('wadUpload').classList.add('loaded');
+            document.getElementById('gameArea').style.display = '';
+
+            const gs = readGameState();
+            displayPx = gs.px; displayPy = gs.py; displayAngle = gs.pangle;
+            latestGs = gs;
+
+            renderViewport(mapData, gs);
+            renderMinimap(mapData, gs);
+            renderHUDBar(gs);
+            renderHeatmap(document.getElementById('stateCanvas'), state, config);
+
+            // Populate C source panel
+            if (info.source) {
+                buildCodeView(info.source, 'sourceBody');
+                const srcLines = info.source.split('\n').length;
+                document.getElementById('sourceStats').textContent = `${srcLines} lines`;
+                document.getElementById('sourcePanel').style.display = '';
+            }
+
+            // Populate ISA disassembly panel
+            if (info.disassembly) {
+                const isaBody = document.getElementById('isaBody');
+                isaBody.innerHTML = '';
+                info.disassembly.forEach((line, i) => {
+                    const div = document.createElement('div');
+                    div.className = 'code-line';
+                    // Split at semicolon to highlight the source comment
+                    const parts = line.split('  ; ');
+                    let html = `<span class="code-lineno">${i + 1}</span><span class="code-text">`;
+                    if (parts.length > 1) {
+                        html += highlightC(parts[0]) + ' <span class="cmt">; ' + highlightC(parts[1]) + '</span>';
+                    } else {
+                        html += highlightC(parts[0]);
+                    }
+                    html += '</span>';
+                    div.innerHTML = html;
+                    isaBody.appendChild(div);
+                });
+                const opcodes = info.opcode_counts || {};
+                const active = Object.entries(opcodes).filter(([k]) => k !== 'HALT');
+                const summary = active.map(([k, v]) => `${k}: ${v}`).join(', ');
+                document.getElementById('isaStats').textContent = `${info.num_instructions} instructions \u2014 ${summary}`;
+                document.getElementById('isaPanel').style.display = '';
+            }
+
+            gameRunning = true;
+            setStatus('done', 'Ready');
+            requestAnimationFrame(renderLoop);
+            tickLoop();
+        }
+    })();
+    </script>
+</body>
+</html>

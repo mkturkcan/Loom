@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C REPL — Loom</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.27.4/full/pyodide.js"></script>
+    <link rel="stylesheet" href="common.css">
+    <style>
+        .repl-layout {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .repl-editor {
+            min-height: 240px;
+            tab-size: 4;
+        }
+
+        .repl-output {
+            min-height: 80px;
+        }
+
+        .repl-toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 12px 16px;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        .repl-toolbar select {
+            background: #fff;
+            color: #374151;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        .compile-info {
+            display: flex;
+            gap: 16px;
+            padding: 10px 16px;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            color: #6b7280;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+            flex-wrap: wrap;
+        }
+
+        .compile-info strong {
+            color: #111827;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .pyodide-status {
+            font-size: 0.65rem;
+            color: #9ca3af;
+            margin-left: auto;
+        }
+
+        /* Side-by-side editor + ASM panel */
+        .editor-row {
+            display: flex;
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .editor-col {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .editor-col .repl-editor {
+            flex: 1;
+        }
+
+        .asm-col {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .asm-panel {
+            flex: 1;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .asm-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 14px;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .asm-header-title {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: #9ca3af;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .asm-header-count {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: #6366f1;
+            font-weight: 600;
+        }
+
+        .asm-body {
+            flex: 1;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            line-height: 1.65;
+            padding: 0;
+            max-height: 350px;
+        }
+
+        .asm-line {
+            display: flex;
+            padding: 0 12px;
+            min-height: 1.65em;
+            transition: background 0.1s;
+        }
+
+        .asm-line:hover {
+            background: #f3f4f6;
+        }
+
+        .asm-addr {
+            width: 32px;
+            text-align: right;
+            padding-right: 10px;
+            color: #d1d5db;
+            user-select: none;
+            flex-shrink: 0;
+        }
+
+        .asm-op {
+            width: 60px;
+            font-weight: 600;
+            color: #7c3aed;
+            flex-shrink: 0;
+        }
+
+        .asm-args {
+            flex: 1;
+            color: #374151;
+        }
+
+        .asm-src {
+            color: #9ca3af;
+            font-size: 0.65rem;
+            margin-left: 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 120px;
+        }
+
+        .asm-line.halt .asm-op {
+            color: #ef4444;
+        }
+
+        .asm-line.jump .asm-op {
+            color: #0891b2;
+        }
+
+        .asm-line.mem .asm-op {
+            color: #059669;
+        }
+
+        .asm-stats {
+            padding: 8px 14px;
+            border-top: 1px solid #e5e7eb;
+            background: #f9fafb;
+            font-size: 0.65rem;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+
+        .asm-stats-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 10px;
+        }
+
+        .asm-stats-item {
+            white-space: nowrap;
+        }
+
+        .asm-stats-item strong {
+            color: #374151;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .asm-empty {
+            padding: 40px 16px;
+            text-align: center;
+            color: #9ca3af;
+            font-size: 0.8rem;
+            font-family: 'Inter', sans-serif;
+        }
+
+        @media (max-width: 860px) {
+            .editor-row {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="index.html">Loom C REPL</a></h1>
+        <p class="subtitle">Write C, compile to ISA, execute on a transformer: live in the browser</p>
+    </header>
+
+    <div class="page-layout">
+        <div class="network-panel" id="networkPanel"></div>
+
+        <div class="main-panel">
+            <div class="repl-toolbar">
+                <select id="exampleSelect">
+                    <option value="">-- Load Example --</option>
+                    <option value="fib">Fibonacci</option>
+                    <option value="gcd">GCD</option>
+                    <option value="sum">Sum 1..10</option>
+                    <option value="max">Find Maximum</option>
+                    <option value="collatz">Collatz</option>
+                    <option value="swap">Swap Demo</option>
+                </select>
+                <button class="btn btn-primary" id="btnCompileRun">Compile & Run</button>
+                <button class="btn btn-secondary" id="btnClear">Clear Output</button>
+                <span class="pyodide-status" id="pyodideStatus">Loading Pyodide...</span>
+            </div>
+
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Loading...</span>
+            </div>
+
+            <div class="editor-row">
+                <div class="editor-col">
+                    <textarea class="repl-editor" id="codeEditor" spellcheck="false">int main() {
+    int a = 0;
+    int b = 1;
+    int n = 7;
+    int i = 0;
+    while (i < n) {
+        int t = a + b;
+        a = b;
+        b = t;
+        i += 1;
+    }
+    return a;
+}
+</textarea>
+                </div>
+                <div class="asm-col">
+                    <div class="asm-panel">
+                        <div class="asm-header">
+                            <span class="asm-header-title">Compiled ISA</span>
+                            <span class="asm-header-count" id="asmCount"></span>
+                        </div>
+                        <div class="asm-body" id="asmBody">
+                            <div class="asm-empty">Press Compile & Run to see instructions</div>
+                        </div>
+                        <div class="asm-stats" id="asmStats" style="display:none">
+                            <div class="asm-stats-row" id="asmOpcodeStats"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">Output</div>
+                <div class="repl-output" id="replOutput">Ready. Write C code and press Compile & Run.</div>
+            </div>
+
+            <div class="compile-info">
+                <span>Instructions: <strong id="infoInstr">--</strong></span>
+                <span>Variables: <strong id="infoVars">--</strong></span>
+                <span>Steps: <strong id="infoSteps">--</strong></span>
+                <span>Time: <strong id="infoTime">--</strong></span>
+                <span>Result: <strong id="infoResult">--</strong></span>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">Variables</div>
+                <div class="var-grid" id="varGrid"></div>
+            </div>
+
+            <div class="info-panel">
+                <h3>How It Works</h3>
+                <p>
+                    Your C code is compiled to Extended ISA instructions using
+                    <strong>Pyodide</strong>, Python running in the browser. The compiled program
+                    is loaded into the transformer's state tensor and executed via ONNX Runtime.
+                </p>
+                <p>
+                    Supported: <code>int</code> variables (8-bit, -128..127), arrays,
+                    <code>if/else</code>, <code>while</code>, <code>for</code>,
+                    functions (no recursion), <code>+</code> <code>-</code> <code>&</code>
+                    <code>|</code> <code>^</code> comparisons, <code>&&</code> <code>||</code> <code>!</code>,
+                    <code>swap(a, b)</code>.
+                    No <code>*</code> <code>/</code> <code>%</code> pointers or structs.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script src="common.js"></script>
+    <script>
+    (async function() {
+        let pyodide = null;
+        let config = null;
+        let state = null;
+        let onnxReady = false;
+
+        const codeEditor = document.getElementById('codeEditor');
+        const replOutput = document.getElementById('replOutput');
+        const btnCompileRun = document.getElementById('btnCompileRun');
+        const btnClear = document.getElementById('btnClear');
+        const exampleSelect = document.getElementById('exampleSelect');
+        const varGrid = document.getElementById('varGrid');
+        const asmBody = document.getElementById('asmBody');
+        const asmCount = document.getElementById('asmCount');
+        const asmStats = document.getElementById('asmStats');
+        const asmOpcodeStats = document.getElementById('asmOpcodeStats');
+
+        document.getElementById('networkPanel').innerHTML = buildNetworkPanelHTML();
+
+        const OPCODE_NAMES = [
+            'HALT','MOV','ADD','JMP','JZ','JNZ','INC','DEC',
+            'SHL','SHR','CMP','LOAD','AND','OR','XOR','SUB',
+            'FIND','SWAP','CMOV','MULACC'
+        ];
+
+        const JUMP_OPS = new Set([3, 4, 5, 10]); // JMP, JZ, JNZ, CMP
+        const MEM_OPS = new Set([1, 11, 16, 17]); // MOV, LOAD, FIND, SWAP
+
+        const EXAMPLES = {
+            fib: `int main() {\n    int a = 0;\n    int b = 1;\n    int n = 7;\n    int i = 0;\n    while (i < n) {\n        int t = a + b;\n        a = b;\n        b = t;\n        i += 1;\n    }\n    return a;\n}`,
+            gcd: `int main() {\n    int a = 48;\n    int b = 18;\n    while (b != 0) {\n        int t = a;\n        while (t >= b) {\n            t = t - b;\n        }\n        a = b;\n        b = t;\n    }\n    return a;\n}`,
+            sum: `int main() {\n    int sum = 0;\n    int i = 1;\n    while (i <= 10) {\n        sum += i;\n        i += 1;\n    }\n    return sum;\n}`,
+            max: `int main() {\n    int a[5];\n    a[0] = 12;\n    a[1] = 45;\n    a[2] = 7;\n    a[3] = 38;\n    a[4] = 23;\n    int mx = a[0];\n    int i = 1;\n    while (i < 5) {\n        if (a[i] > mx) {\n            mx = a[i];\n        }\n        i += 1;\n    }\n    return mx;\n}`,
+            collatz: `int main() {\n    int n = 6;\n    int steps = 0;\n    while (n != 1) {\n        int odd = n & 1;\n        if (odd != 0) {\n            n = n + n + n + 1;\n        } else {\n            int half = 0;\n            int test = 0;\n            while (test + test < n) {\n                half += 1;\n                test = half;\n            }\n            n = half;\n        }\n        steps += 1;\n    }\n    return steps;\n}`,
+            swap: `// SWAP opcode demo: single-instruction exchange\nint main() {\n    int x = 42;\n    int y = -17;\n    // swap(a,b) compiles to 1 SWAP instruction\n    // (without it, you'd need 3 MOVs + a temp)\n    swap(x, y);\n    // Now x = -17, y = 42\n    return x + y;  // -17 + 42 = 25\n}`,
+        };
+
+        exampleSelect.addEventListener('change', () => {
+            if (exampleSelect.value && EXAMPLES[exampleSelect.value]) {
+                codeEditor.value = EXAMPLES[exampleSelect.value];
+            }
+            exampleSelect.value = '';
+        });
+
+        btnClear.addEventListener('click', () => {
+            replOutput.innerHTML = 'Ready.';
+        });
+
+        // Handle Tab key in textarea
+        codeEditor.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = codeEditor.selectionStart;
+                const end = codeEditor.selectionEnd;
+                codeEditor.value = codeEditor.value.substring(0, start) + '    ' + codeEditor.value.substring(end);
+                codeEditor.selectionStart = codeEditor.selectionEnd = start + 4;
+            }
+        });
+
+        function appendOutput(text, cls) {
+            const line = document.createElement('div');
+            if (cls) line.className = cls;
+            line.textContent = text;
+            replOutput.appendChild(line);
+            replOutput.scrollTop = replOutput.scrollHeight;
+        }
+
+        function formatArg(val, s, m) {
+            const memStart = s;
+            const cmdStart = s + m;
+            if (val >= memStart && val < cmdStart) {
+                return `mem[${val - memStart}]`;
+            } else if (val >= cmdStart) {
+                return `@${val}`;
+            }
+            return `${val}`;
+        }
+
+        function renderASM(commands, sourceMap, sourceLines, cfg) {
+            asmBody.innerHTML = '';
+            const s = cfg.s, m = cfg.m;
+            const cmdStart = s + m;
+
+            // Build instr_index -> source_line map
+            const instrToSrc = {};
+            for (const [instrIdx, srcLine] of sourceMap) {
+                instrToSrc[instrIdx] = srcLine;
+            }
+
+            // Count opcodes
+            const counts = {};
+            for (const cmd of commands) {
+                const name = OPCODE_NAMES[cmd[0]] || `OP${cmd[0]}`;
+                counts[name] = (counts[name] || 0) + 1;
+            }
+
+            for (let i = 0; i < commands.length; i++) {
+                const [op, b, c] = commands[i];
+                const opName = OPCODE_NAMES[op] || `OP${op}`;
+                const addr = cmdStart + i;
+
+                const line = document.createElement('div');
+                line.className = 'asm-line';
+                if (op === 0) line.classList.add('halt');
+                else if (JUMP_OPS.has(op)) line.classList.add('jump');
+                else if (MEM_OPS.has(op)) line.classList.add('mem');
+
+                const addrSpan = document.createElement('span');
+                addrSpan.className = 'asm-addr';
+                addrSpan.textContent = i;
+
+                const opSpan = document.createElement('span');
+                opSpan.className = 'asm-op';
+                opSpan.textContent = opName;
+
+                const argsSpan = document.createElement('span');
+                argsSpan.className = 'asm-args';
+                if (op === 0) {
+                    argsSpan.textContent = '';
+                } else if (op === 3) { // JMP
+                    argsSpan.textContent = `@${b}`;
+                } else if (op === 6 || op === 7) { // INC, DEC
+                    argsSpan.textContent = formatArg(b, s, m);
+                } else {
+                    argsSpan.textContent = `${formatArg(b, s, m)}, ${formatArg(c, s, m)}`;
+                }
+
+                line.appendChild(addrSpan);
+                line.appendChild(opSpan);
+                line.appendChild(argsSpan);
+
+                // Source annotation
+                if (instrToSrc[i] !== undefined) {
+                    const srcSpan = document.createElement('span');
+                    srcSpan.className = 'asm-src';
+                    const srcLine = sourceLines[instrToSrc[i] - 1];
+                    if (srcLine) {
+                        srcSpan.textContent = `; L${instrToSrc[i]}: ${srcLine.trim()}`;
+                        srcSpan.title = srcLine.trim();
+                    }
+                    line.appendChild(srcSpan);
+                }
+
+                asmBody.appendChild(line);
+            }
+
+            asmCount.textContent = `${commands.length} instr`;
+
+            // Opcode histogram
+            asmOpcodeStats.innerHTML = '';
+            const sorted = Object.entries(counts)
+                .filter(([k]) => k !== 'HALT')
+                .sort((a, b) => b[1] - a[1]);
+            for (const [name, count] of sorted) {
+                const item = document.createElement('span');
+                item.className = 'asm-stats-item';
+                item.innerHTML = `${name}: <strong>${count}</strong>`;
+                asmOpcodeStats.appendChild(item);
+            }
+            asmStats.style.display = sorted.length > 0 ? '' : 'none';
+        }
+
+        // ---- Compile & Run ----
+        async function compileAndRun() {
+            if (!pyodide || !onnxReady) {
+                appendOutput('Not ready yet - please wait for Pyodide and ONNX to load.', 'error');
+                return;
+            }
+
+            const source = codeEditor.value;
+            replOutput.innerHTML = '';
+            appendOutput('Compiling...');
+            setStatus('running', 'Compiling...');
+
+            try {
+                // Compile using Pyodide (pure Python - no torch needed)
+                pyodide.globals.set('__c_source', source);
+                const result = pyodide.runPython(`
+import json
+from c_compiler import lex, Parser, CodeGen
+from c_compiler import ExtendedConfigV4
+
+try:
+    cfg = ExtendedConfigV4.__new__(ExtendedConfigV4)
+    cfg.s = 32; cfg.m = 64; cfg.n = 1024; cfg.N = 8
+    cfg.logn = 10
+    cfg.nrows_cmds = 3 * cfg.logn
+    cfg.nrows_memory = cfg.N
+    cfg.nrows_scratchpad = 3 * cfg.logn + 2 * cfg.N
+    cfg.nrows_pc = cfg.logn
+    cfg.nrows_pos_enc = cfg.logn
+    cfg.nrows_buffer = 3 * cfg.N + cfg.N + cfg.logn
+    cfg.nrows_tag = cfg.N
+    cfg.nrows_indicator = 1
+    cfg.idx_memory = cfg.nrows_cmds
+    cfg.idx_scratchpad = cfg.idx_memory + cfg.nrows_memory
+    cfg.idx_pc = cfg.idx_scratchpad + cfg.nrows_scratchpad
+    cfg.idx_pos_enc = cfg.idx_pc + cfg.nrows_pc
+    cfg.idx_buffer = cfg.idx_pos_enc + cfg.nrows_pos_enc
+    cfg.idx_tag = cfg.idx_buffer + cfg.nrows_buffer
+    cfg.d_model = (cfg.nrows_cmds + cfg.nrows_memory + cfg.nrows_scratchpad +
+                   cfg.nrows_pc + cfg.nrows_pos_enc + cfg.nrows_buffer +
+                   cfg.nrows_tag + cfg.nrows_indicator)
+    cfg.lam = 100.0
+
+    tokens = lex(__c_source)
+    parser = Parser(tokens)
+    program = parser.parse_program()
+    codegen = CodeGen(cfg)
+    codegen.compile_program(program)
+    memory = codegen.mem.init_memory()
+    commands = codegen.resolve()
+    meta = {
+        'variables': {name: slot.addr for name, slot in codegen.mem.slots.items()
+                      if not name.startswith('__')},
+        'num_instructions': len(commands),
+        'retval_addr': codegen.RETVAL,
+        'output_addr': codegen.OUTPUT,
+        'source_map': codegen.source_map,
+    }
+    output = {
+        'success': True,
+        'memory': memory,
+        'commands': [list(c) for c in commands],
+        'num_instructions': meta['num_instructions'],
+        'variables': meta['variables'],
+        'retval_addr': meta['retval_addr'],
+        'output_addr': meta['output_addr'],
+        'source_map': meta['source_map'],
+        'config': {
+            's': cfg.s, 'm': cfg.m, 'n': cfg.n, 'N': cfg.N,
+            'd_model': cfg.d_model, 'logn': cfg.logn,
+            'idx_memory': cfg.idx_memory, 'idx_pc': cfg.idx_pc,
+            'idx_pos_enc': cfg.idx_pos_enc,
+            'idx_tag': cfg.idx_tag,
+        }
+    }
+except Exception as e:
+    import traceback
+    output = {'success': False, 'error': str(e) + '\\n' + traceback.format_exc()}
+
+json.dumps(output)
+`);
+
+                const compileResult = JSON.parse(result);
+
+                if (!compileResult.success) {
+                    appendOutput('Compile error: ' + compileResult.error, 'error');
+                    setStatus('error', 'Compile error');
+                    asmBody.innerHTML = '<div class="asm-empty" style="color:#ef4444">Compile error</div>';
+                    asmCount.textContent = '';
+                    asmStats.style.display = 'none';
+                    return;
+                }
+
+                const sourceLines = source.split('\n');
+
+                // Render ASM panel
+                renderASM(
+                    compileResult.commands,
+                    compileResult.source_map || [],
+                    sourceLines,
+                    compileResult.config
+                );
+
+                // Count opcodes for output
+                const opcCounts = {};
+                for (const cmd of compileResult.commands) {
+                    const name = OPCODE_NAMES[cmd[0]] || `OP${cmd[0]}`;
+                    opcCounts[name] = (opcCounts[name] || 0) + 1;
+                }
+                const opcSummary = Object.entries(opcCounts)
+                    .filter(([k]) => k !== 'HALT')
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([k, v]) => `${k}:${v}`)
+                    .join(', ');
+
+                appendOutput(`Compiled: ${compileResult.num_instructions} instructions [${opcSummary}]`);
+                document.getElementById('infoInstr').textContent = compileResult.num_instructions;
+                document.getElementById('infoVars').textContent = Object.keys(compileResult.variables).length;
+
+                config = compileResult.config;
+                config.idx_scratchpad = config.idx_memory + config.N;
+                config.idx_buffer = config.idx_pc + config.logn + config.logn;
+
+                // Build state tensor in JS (mirrors init_state_v4)
+                state = buildStateTensor(compileResult);
+
+                _currentState = state;
+                _currentConfig = config;
+
+                // Build variable display
+                varGrid.innerHTML = '';
+                const allVars = { ...compileResult.variables, RETVAL: compileResult.retval_addr };
+                for (const [name, addr] of Object.entries(allVars)) {
+                    const cell = document.createElement('div');
+                    cell.className = 'var-cell';
+                    cell.innerHTML = `<span class="var-name">${name}</span><span class="var-val" id="rvar_${name}">0</span>`;
+                    varGrid.appendChild(cell);
+                }
+
+                // Run on ONNX
+                appendOutput('Executing on Loom...');
+                setStatus('running', 'Executing...');
+
+                const t0 = performance.now();
+                const runResult = await runUntilStop(state, config, {
+                    maxSteps: 50000,
+                    yieldEvery: 100,
+                    onStep: (s, pc, step) => {
+                        if (step % 200 === 0) {
+                            _currentState = s;
+                            renderHeatmap(document.getElementById('stateCanvas'), s, config);
+                        }
+                    }
+                });
+
+                state = runResult.state;
+                _currentState = state;
+                const elapsed = runResult.ms;
+
+                // Read results
+                for (const [name, addr] of Object.entries(allVars)) {
+                    const val = readMemory(state, config, addr);
+                    const el = document.getElementById('rvar_' + name);
+                    if (el) el.textContent = val;
+                }
+
+                const retval = readMemory(state, config, compileResult.retval_addr);
+
+                appendOutput(`Done: ${runResult.steps} steps in ${elapsed.toFixed(0)}ms`);
+                appendOutput(`Return value: ${retval}`);
+
+                document.getElementById('infoSteps').textContent = runResult.steps;
+                document.getElementById('infoTime').textContent = elapsed.toFixed(0) + 'ms';
+                document.getElementById('infoResult').textContent = retval;
+
+                updateStat('statSteps', runResult.steps);
+                updateStat('statTotal', runResult.steps);
+                updateStat('statMs', (elapsed / runResult.steps).toFixed(1));
+
+                renderHeatmap(document.getElementById('stateCanvas'), state, config);
+
+                if (runResult.halted) {
+                    setStatus('done', `Halted after ${runResult.steps} steps, returned ${retval}`);
+                } else {
+                    setStatus('error', `Exceeded ${runResult.steps} steps without halting`);
+                    appendOutput('Warning: program did not halt within step limit', 'error');
+                }
+
+            } catch (err) {
+                console.error(err);
+                appendOutput('Error: ' + err.message, 'error');
+                setStatus('error', 'Error');
+            }
+        }
+
+        btnCompileRun.addEventListener('click', compileAndRun);
+
+        // Ctrl+Enter shortcut
+        codeEditor.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                compileAndRun();
+            }
+        });
+
+        // ---- Init ----
+        setStatus('loading', 'Loading Pyodide + ONNX...');
+
+        // Load ONNX model and Pyodide in parallel
+        const onnxPromise = loadONNXModel('programs/argmax_155x1024.onnx').then(backend => {
+            updateStat('statBackend', backend);
+            onnxReady = true;
+        });
+
+        const pyodidePromise = (async () => {
+            document.getElementById('pyodideStatus').textContent = 'Loading Pyodide...';
+            pyodide = await loadPyodide();
+
+            // Load compiler source file into Pyodide filesystem
+            // We only need c_compiler.py (lexer/parser/codegen are pure Python)
+            // We create stubs for torch-dependent modules since we build the state in JS
+            document.getElementById('pyodideStatus').textContent = 'Loading compiler...';
+
+            const compilerResp = await fetch('programs/c_compiler.py');
+            const compilerText = await compilerResp.text();
+            pyodide.FS.writeFile('c_compiler.py', compilerText);
+
+            // Create a stub for extended_isa_v4 that only provides the constants and config
+            pyodide.runPython(`
+import sys
+
+# Stub module for extended_isa_v4 - provides only what the compiler needs
+class _StubModule:
+    pass
+
+stub = _StubModule()
+stub.__name__ = 'extended_isa_v4'
+
+# Opcode constants
+stub.OP_HALT = 0
+stub.OP_MOV = 1
+stub.OP_ADD = 2
+stub.OP_JMP = 3
+stub.OP_JZ = 4
+stub.OP_JNZ = 5
+stub.OP_INC = 6
+stub.OP_DEC = 7
+stub.OP_SHL = 8
+stub.OP_SHR = 9
+stub.OP_CMP = 10
+stub.OP_LOAD = 11
+stub.OP_AND = 12
+stub.OP_OR = 13
+stub.OP_XOR = 14
+stub.OP_SUB = 15
+stub.OP_FIND = 16
+stub.OP_SWAP = 17
+stub.OP_CMOV = 18
+stub.OP_MULACC = 19
+
+# Config stub
+class ExtendedConfigV4:
+    def __init__(self, s=32, m=8, n=64, N=8, lam=100.0):
+        self.s = s
+        self.m = m
+        self.n = n
+        self.N = N
+        self.lam = lam
+        self.logn = 0
+        v = n
+        while v > 1:
+            self.logn += 1
+            v >>= 1
+        self.nrows_cmds = 3 * self.logn
+        self.nrows_memory = N
+        self.nrows_scratchpad = 3 * self.logn + 2 * N
+        self.nrows_pc = self.logn
+        self.nrows_pos_enc = self.logn
+        self.nrows_buffer = 3 * N + N + self.logn
+        self.nrows_tag = N
+        self.nrows_indicator = 1
+        self.idx_memory = self.nrows_cmds
+        self.idx_scratchpad = self.idx_memory + self.nrows_memory
+        self.idx_pc = self.idx_scratchpad + self.nrows_scratchpad
+        self.idx_pos_enc = self.idx_pc + self.nrows_pc
+        self.idx_buffer = self.idx_pos_enc + self.nrows_pos_enc
+        self.idx_tag = self.idx_buffer + self.nrows_buffer
+        self.d_model = (self.nrows_cmds + self.nrows_memory + self.nrows_scratchpad +
+                       self.nrows_pc + self.nrows_pos_enc + self.nrows_buffer +
+                       self.nrows_tag + self.nrows_indicator)
+
+stub.ExtendedConfigV4 = ExtendedConfigV4
+
+# Stubs for things the compiler imports but doesn't use for compilation
+stub.ExtendedNeuralComputerV4 = None
+stub.init_state_v4 = None
+stub.read_memory_v4 = None
+stub.get_pc_v4 = None
+
+sys.modules['extended_isa_v4'] = stub
+print("Stub extended_isa_v4 loaded OK")
+`);
+
+            // Verify compiler loads
+            pyodide.runPython('from c_compiler import lex, Parser, CodeGen; print("Compiler loaded OK")');
+            document.getElementById('pyodideStatus').textContent = 'Ready';
+        })();
+
+        try {
+            await Promise.all([onnxPromise, pyodidePromise]);
+            setStatus('ready', 'Ready. Write C code and press Compile & Run (Ctrl+Enter)');
+        } catch (err) {
+            console.error('Init error:', err);
+            setStatus('error', 'Error: ' + err.message);
+            document.getElementById('pyodideStatus').textContent = 'Error';
+        }
+    })();
+    </script>
+</body>
+</html>

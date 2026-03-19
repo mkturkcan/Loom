@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sorting — Neural Architecture Visualization</title>
+    <link rel="stylesheet" href="common.css">
+    <script src="c_compiler.js"></script>
+    <script src="isa_interpreter.js"></script>
+    <script src="common.js"></script>
+    <script src="sparse_argmax.js"></script>
+    <style>
+        body { max-width: none; padding: 16px 20px 80px; background: #f8fafc; }
+        header { margin-bottom: 12px; }
+
+        .two-col {
+            display: flex; gap: 16px; align-items: flex-start;
+            height: calc(100vh - 80px);
+        }
+
+        /* ── Left column: controls + bars + code ── */
+        .left-col {
+            flex: 1; min-width: 300px;
+            display: flex; flex-direction: column; gap: 10px;
+            height: 100%; overflow-y: auto;
+        }
+
+        .sort-controls {
+            display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+            padding: 10px 14px; background: #fff; border: 1px solid #e5e7eb;
+            border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .sort-controls select {
+            background: #fff; color: #374151; border: 1px solid #d1d5db;
+            border-radius: 8px; padding: 6px 10px; font-family: inherit; font-size: 0.78rem; cursor: pointer;
+        }
+
+        .sort-container {
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+            padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .sort-bars {
+            display: flex; align-items: flex-end; gap: 4px; justify-content: center;
+            height: 180px; padding: 16px 8px 0;
+        }
+        .sort-bar { position: relative; flex: 1; min-width: 28px; border-radius: 4px 4px 0 0; transition: height 0.12s, background 0.12s; }
+        .sort-bar-value {
+            position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+            font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; font-weight: 700; color: #111827;
+        }
+        .sort-legend {
+            display: flex; gap: 12px; justify-content: center; padding: 6px;
+            font-size: 0.65rem; color: #6b7280;
+        }
+        .sort-legend-item { display: flex; align-items: center; gap: 4px; }
+        .sort-legend-swatch { width: 10px; height: 7px; border-radius: 2px; }
+
+        .exec-info {
+            display: flex; gap: 12px; padding: 8px 14px;
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+            font-size: 0.72rem; color: #6b7280; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .exec-info strong { color: #374151; }
+
+        .code-panel { flex-shrink: 0; }
+        .code-body { max-height: 220px; }
+
+        /* ── Right column: canvas ── */
+        .right-col {
+            flex: 1; max-width: 38%; height: 100%;
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04); position: relative; overflow: hidden;
+        }
+
+        @media (max-width: 700px) {
+            .two-col { flex-direction: column; height: auto; }
+            .left-col { min-width: 0; width: 100%; height: auto; }
+            .right-col { max-width: 100% !important; width: 100%; height: 60vh; }
+            .sort-bars { height: 140px; }
+            .sort-bar { min-width: 20px; }
+            .sort-bar-value { font-size: 0.6rem; }
+        }
+        #vizCanvas { display: block; width: 100%; height: 100%; }
+        .viz-legend {
+            position: absolute; bottom: 6px; right: 8px;
+            background: rgba(255,255,255,0.85); border: 1px solid #e5e7eb;
+            border-radius: 4px; padding: 3px 7px; font-size: 0.5rem; color: #6b7280;
+            display: flex; gap: 7px;
+        }
+        .viz-legend-item { display: flex; align-items: center; gap: 2px; }
+        .viz-legend-dot { width: 5px; height: 5px; border-radius: 1px; }
+        .view-toggle {
+            position: absolute; top: 8px; right: 8px;
+            font-family: inherit; font-size: 0.6rem; padding: 3px 8px;
+            border-radius: 4px; border: 1px solid #d1d5db; background: #fff;
+            cursor: pointer; color: #6b7280; z-index: 1;
+        }
+        .view-toggle:hover { border-color: #6366f1; color: #6366f1; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="index.html">Loom Sorting</a></h1>
+        <p class="subtitle">Bubble sort executed by a transformer. Real activations traced through all 8 layers.</p>
+    </header>
+
+    <div class="two-col">
+        <!-- Left column -->
+        <div class="left-col">
+            <div class="sort-controls">
+                <button class="btn btn-primary" id="btnSort">Sort</button>
+                <button class="btn btn-secondary" id="btnStep">Step</button>
+                <button class="btn btn-secondary" id="btnReset">Shuffle</button>
+                <select id="sizeSelect">
+                    <option value="5">5 elements</option>
+                    <option value="6">6 elements</option>
+                    <option value="7" selected>7 elements</option>
+                    <option value="8">8 elements</option>
+                </select>
+                <div style="margin-left:auto;display:flex;align-items:center;gap:5px;font-size:0.7rem;color:#9ca3af">
+                    <label>Speed</label>
+                    <input type="range" id="speedSlider" min="1" max="100" value="30" style="width:70px;accent-color:#6366f1">
+                </div>
+            </div>
+
+            <div class="sort-container">
+                <div class="sort-bars" id="sortBars"></div>
+                <div class="sort-legend">
+                    <div class="sort-legend-item"><div class="sort-legend-swatch" style="background:#6366f1"></div> Default</div>
+                    <div class="sort-legend-item"><div class="sort-legend-swatch" style="background:#f59e0b"></div> Comparing</div>
+                    <div class="sort-legend-item"><div class="sort-legend-swatch" style="background:#10b981"></div> Sorted</div>
+                </div>
+            </div>
+
+            <div class="exec-info">
+                <span>Steps: <strong id="statSteps">0</strong></span>
+                <span>Swaps: <strong id="statComps">0</strong></span>
+                <span><strong id="statStatus">Ready</strong></span>
+            </div>
+
+            <div class="code-panel">
+                <div class="code-header">
+                    <span class="code-header-title">Bubble Sort: C Source</span>
+                    <span style="font-size:0.65rem;color:#9ca3af" id="instrCount"></span>
+                </div>
+                <div class="code-body" id="codeBody"></div>
+            </div>
+        </div>
+
+        <!-- Right column: visualization canvas -->
+        <div class="right-col">
+            <button class="view-toggle" id="btnView">2D View</button>
+            <canvas id="vizCanvas"></canvas>
+            <div class="viz-legend" id="legend3d">
+                <div class="viz-legend-item"><div class="viz-legend-dot" style="background:#f59e0b"></div> W1</div>
+                <div class="viz-legend-item"><div class="viz-legend-dot" style="background:#10b981"></div> W2</div>
+                <div class="viz-legend-item"><div class="viz-legend-dot" style="background:#6366f1"></div> Attn</div>
+                <div class="viz-legend-item"><div class="viz-legend-dot" style="background:#ef4444"></div> High</div>
+            </div>
+            <div class="viz-legend" id="legend2d" style="display:none">
+                <div class="viz-legend-item"><div class="viz-legend-dot" style="background:#ef4444"></div> +delta</div>
+                <div class="viz-legend-item"><div class="viz-legend-dot" style="background:#3b82f6"></div> -delta</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    (async function() {
+    const CFG = { s: 32, m: 32, n: 128, N: 8 };
+
+    const archData = await (await fetch('programs/arch_sort.json')).json();
+    const D = archData.d, NL = archData.layers.length, REGIONS = archData.row_regions;
+    const sparseEngine = await loadSparseArgmax('programs/sparse_weights_128x128.json', CFG.n);
+
+    let arrSize = 7, arr = [], compileResult = null, stateTensor = null;
+    let running = false, totalSteps = 0, comparisons = 0;
+    let traces = null, nt = 0, view3D = true;
+    let sourceMap = {};  // PC address -> source line number
+
+    const SORT_SRC = `int main() {
+    int arr[8]; int n; int i; int j; int a; int b;
+    n = __N__;
+    i = 0;
+    while (i < n) {
+        j = 0;
+        while (j < n - 1) {
+            a = arr[j]; b = arr[j + 1];
+            if (a > b) { arr[j] = b; arr[j + 1] = a; }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}`;
+
+    // Show code (rebuilt on each compile to match current arrSize)
+    buildCodeView(SORT_SRC.replace('__N__', String(arrSize)), 'codeBody');
+
+    function compile() {
+        const src = SORT_SRC.replace('__N__', String(arrSize));
+        compileResult = compileC(src, CFG.s, CFG.m, CFG.n, CFG.N);
+        nt = CFG.s + CFG.m + compileResult.commands.length;
+        document.getElementById('instrCount').textContent = compileResult.commands.length + ' instructions';
+        buildCodeView(src, 'codeBody');
+        // Build source map: PC address -> source line number
+        sourceMap = {};
+        const pcBase = CFG.s + CFG.m;
+        for (const [instrIdx, line] of (compileResult.meta.source_map || [])) {
+            sourceMap[pcBase + instrIdx] = line;
+        }
+    }
+
+    function shuffle() {
+        arr = [];
+        for (let i = 1; i <= arrSize; i++) arr.push(i);
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        totalSteps = 0; comparisons = 0; traces = null;
+        compile();
+        stateTensor = buildStateTensor(compileResult);
+        const vars = compileResult.meta.variables;
+        for (let i = 0; i < arrSize; i++) writeMemory(stateTensor, compileResult.config, vars.arr + i, arr[i]);
+        // Run one initial step to have something to show
+        doStepUntilSwap();
+        updateUI();
+    }
+
+    function readArr() {
+        const cfg = compileResult.config, vars = compileResult.meta.variables;
+        return Array.from({length: arrSize}, (_, i) => readMemory(stateTensor, cfg, vars.arr + i));
+    }
+
+    function doStepUntilSwap() {
+        if (!stateTensor) return false;
+        const cfg = compileResult.config, prevArr = readArr();
+        for (let b = 0; b < 200; b++) {
+            if (sparseEngine.getPC(stateTensor, cfg.idx_pc, cfg.logn) === 0) return false;
+            traces = sparseEngine.stepTraced(stateTensor, nt);
+            totalSteps++;
+            const newArr = readArr();
+            for (let i = 0; i < arrSize; i++) if (newArr[i] !== prevArr[i]) { comparisons++; arr = newArr; return true; }
+        }
+        arr = readArr();
+        return sparseEngine.getPC(stateTensor, cfg.idx_pc, cfg.logn) !== 0;
+    }
+
+    // ── Canvas ─────────────────────────────────────────────
+    const canvas = document.getElementById('vizCanvas');
+    const ctx = canvas.getContext('2d');
+    let CW, CH;
+    let _lastW = 0, _lastH = 0;
+    function resize() {
+        const r = canvas.parentElement.getBoundingClientRect();
+        const w = Math.floor(r.width), h = Math.floor(r.height);
+        if (w < 1 || h < 1 || (w === _lastW && h === _lastH)) return;
+        _lastW = w; _lastH = h;
+        const dpr = devicePixelRatio;
+        CW = w * dpr; CH = h * dpr;
+        canvas.width = CW; canvas.height = CH;
+    }
+    resize();
+    new ResizeObserver(resize).observe(canvas.parentElement);
+
+    const LAYER_LABELS = ['L1 Fetch','L2 Decode','L3 Correct','L4 Subtract','L5 Write','L6 Branch','L7 Select','L8 Snap'];
+    const RCOLS = {cmds:'#6366f1',memory:'#10b981',scratchpad:'#f59e0b',pc:'#ef4444',pos_enc:'#8b5cf6',buffer:'#3b82f6',tag:'#14b8a6',indicator:'#9ca3af'};
+    function regionColor(r) { for (const reg of REGIONS) if (r >= reg.start && r < reg.start + reg.size) return RCOLS[reg.name]||'#d1d5db'; return '#d1d5db'; }
+
+    // ═══════════════════════════════════════════════════════
+    // 2D HEATMAP VIEW
+    // ═══════════════════════════════════════════════════════
+    const heatC = document.createElement('canvas'), heatX = heatC.getContext('2d');
+    function draw2D() {
+        ctx.clearRect(0, 0, CW, CH);
+        if (!traces) return;
+        const dpr = devicePixelRatio, pad = 8*dpr, labelW = 52*dpr, gapY = 3*dpr;
+        const slabH = Math.floor((CH - pad*2 - (NL+1)*gapY) / (NL+2));
+        const slabW = CW - pad*2 - labelW;
+        const curNt = traces[0].nt;
+        drawHM(labelW+pad, pad, slabW, slabH, curNt, D, (r,c) => traces[0].input[r*curNt+c], true);
+        ctx.font = `${6*dpr}px Inter,system-ui`; ctx.fillStyle = '#9ca3af'; ctx.textAlign = 'right';
+        ctx.fillText('Input', labelW+pad-4*dpr, pad+slabH/2+2*dpr);
+        for (let li = 0; li < NL; li++) {
+            const y = pad + (li+1)*(slabH+gapY);
+            drawHM(labelW+pad, y, slabW, slabH, curNt, D, (r,c) => traces[li].delta[r*curNt+c], false);
+            ctx.fillText(LAYER_LABELS[li], labelW+pad-4*dpr, y+slabH/2+2*dpr);
+        }
+        const outY = pad + (NL+1)*(slabH+gapY);
+        drawHM(labelW+pad, outY, slabW, slabH, curNt, D, (r,c) => traces[NL-1].output[r*curNt+c], true);
+        ctx.fillText('Output', labelW+pad-4*dpr, outY+slabH/2+2*dpr);
+    }
+    function drawHM(x, y, w, h, dw, dh, fn, isState) {
+        heatC.width = dw; heatC.height = dh;
+        const img = heatX.createImageData(dw, dh), p = img.data;
+        for (let r = 0; r < dh; r++) for (let c = 0; c < dw; c++) {
+            const v = fn(r,c), idx = (r*dw+c)*4;
+            if (isState) {
+                const col = regionColor(r), cr = parseInt(col.slice(1,3),16), cg = parseInt(col.slice(3,5),16), cb = parseInt(col.slice(5,7),16);
+                p[idx]=cr; p[idx+1]=cg; p[idx+2]=cb; p[idx+3]=(v>0?180:40);
+            } else {
+                const a = Math.min(Math.abs(v)*3,1)*255;
+                if (v>0.01){p[idx]=239;p[idx+1]=68;p[idx+2]=68;p[idx+3]=a|0;}
+                else if(v<-0.01){p[idx]=59;p[idx+1]=130;p[idx+2]=246;p[idx+3]=a|0;}
+                else{p[idx]=209;p[idx+1]=213;p[idx+2]=219;p[idx+3]=18;}
+            }
+        }
+        heatX.putImageData(img, 0, 0);
+        ctx.imageSmoothingEnabled = false; ctx.drawImage(heatC, x, y, w, h); ctx.imageSmoothingEnabled = true;
+        ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 0.5; ctx.strokeRect(x, y, w, h);
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // 3D ISOMETRIC VIEW
+    // ═══════════════════════════════════════════════════════
+    const ISO_A = Math.PI / 6, ISO_CA = Math.cos(ISO_A), ISO_SA = Math.sin(ISO_A);
+    function iso(row, layer, depth) { return [(depth - row) * ISO_CA, -layer + (depth + row) * ISO_SA]; }
+
+    function draw3D() {
+        ctx.clearRect(0, 0, CW, CH);
+        if (!traces) return;
+        const curNt = traces[0].nt;
+        const rowS = 0.55, colS = 0.35, layerGap = 50;
+        // Compute bounding box for scale
+        let xMin=1e9,xMax=-1e9,yMin=1e9,yMax=-1e9;
+        for (let li=0;li<NL;li++){const y=li*layerGap;
+            for(const[r,d] of [[0,0],[D*rowS,0],[D*rowS,curNt*colS],[0,curNt*colS]]){
+                const[px,py]=iso(r,y,d);xMin=Math.min(xMin,px);xMax=Math.max(xMax,px);yMin=Math.min(yMin,py);yMax=Math.max(yMax,py);}}
+        xMax += 50; // label space
+        const scale = Math.min(CW/(xMax-xMin+10), CH/(yMax-yMin+10))*0.95;
+        // Center on the top corner (row=0, last col) of the middle layer
+        const midLayer = Math.floor(NL/2);
+        const [topCornerX, topCornerY] = iso(0, midLayer*layerGap, curNt*colS);
+        ctx.save();
+        ctx.translate(CW*0.6, CH*0.5);
+        ctx.scale(scale, scale);
+        ctx.translate(-topCornerX, -(yMin+yMax)/2);
+        for (let li = NL-1; li >= 0; li--) {
+            // Draw input connections (from li-1 to li) BEHIND this slab
+            if (li > 0) draw3DConns(ctx, li-1, layerGap, rowS, colS, curNt);
+            // Draw the slab ON TOP of its input connections
+            draw3DSlab(ctx, li, layerGap, rowS, colS, curNt);
+        }
+        ctx.restore();
+    }
+
+    function draw3DSlab(ctx, li, gap, rowS, colS, cols) {
+        const y = li * gap, trace = traces[li], nt2 = trace.nt;
+        const [a1x,a1y]=iso(0,y,0),[a2x,a2y]=iso(D*rowS,y,0),[a3x,a3y]=iso(D*rowS,y,cols*colS),[a4x,a4y]=iso(0,y,cols*colS);
+        ctx.beginPath(); ctx.moveTo(a1x,a1y); ctx.lineTo(a2x,a2y); ctx.lineTo(a3x,a3y); ctx.lineTo(a4x,a4y); ctx.closePath();
+        ctx.fillStyle = 'rgba(241,245,249,0.45)'; ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.07)'; ctx.lineWidth = 0.4; ctx.stroke();
+        let layerMax = 0;
+        for (let i = 0; i < D * nt2; i++) { const v = Math.abs(trace.delta[i]); if (v > layerMax) layerMax = v; }
+        const sc = layerMax > 0.01 ? 0.8 / layerMax : 50.0;
+        const cStep = Math.max(1, Math.floor(cols / 80));
+        for (let r = 0; r < D; r++) for (let c = 0; c < cols; c += cStep) {
+            const val = trace.delta[r*nt2+c], av = Math.abs(val);
+            if (av < 0.003) continue;
+            const x0=r*rowS,z0=c*colS,w=rowS*0.95,d=colS*cStep;
+            const [p1x,p1y]=iso(x0,y,z0),[p2x,p2y]=iso(x0+w,y,z0),[p3x,p3y]=iso(x0+w,y,z0+d),[p4x,p4y]=iso(x0,y,z0+d);
+            ctx.beginPath(); ctx.moveTo(p1x,p1y); ctx.lineTo(p2x,p2y); ctx.lineTo(p3x,p3y); ctx.lineTo(p4x,p4y); ctx.closePath();
+            ctx.globalAlpha = Math.min(av*sc, 0.8); ctx.fillStyle = val > 0 ? '#ef4444' : '#3b82f6'; ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        const [lx,ly] = iso(0, y, cols*colS);
+        ctx.font = '7px Inter,system-ui'; ctx.fillStyle = '#6b7280'; ctx.textAlign = 'left';
+        ctx.fillText(LAYER_LABELS[li], lx+4, ly-2);
+    }
+
+    const LAYER_BOOST = [1, 1, 1.5, 1, 4, 4, 2, 4];
+
+    function draw3DConns(ctx, li, gap, rowS, colS, cols) {
+        const layer = archData.layers[li], trace = traces[li], nextTrace = traces[li+1];
+        const y1 = li*gap, y2 = (li+1)*gap, curNt = trace.nt, boost = LAYER_BOOST[li]||1;
+        const rowMaxD = new Float32Array(D), rowPeakC = new Int32Array(D);
+        const rowMaxOut = new Float32Array(D);
+        let globalMaxD = 0, globalMaxOut = 0;
+        for (let r = 0; r < D; r++) {
+            let mxD=0,mxO=0,bestC=Math.round(curNt*0.5);
+            for (let c=0;c<curNt;c+=2){
+                const vd=Math.abs(trace.delta[r*curNt+c]),vo=Math.abs(trace.output[r*curNt+c]);
+                if(vd>mxD){mxD=vd;bestC=c;} if(vo>mxO)mxO=vo;
+            }
+            rowMaxD[r]=mxD; rowMaxOut[r]=mxO; rowPeakC[r]=bestC;
+            if(mxD>globalMaxD)globalMaxD=mxD; if(mxO>globalMaxOut)globalMaxOut=mxO;
+        }
+        const connScaleD = (globalMaxD>0.01?0.6/globalMaxD:30)*boost;
+        const connScaleO = (globalMaxOut>0.01?0.4/globalMaxOut:20)*boost;
+        const rowOutPeakC = new Int32Array(D);
+        for(let r=0;r<D;r++){let bestC=Math.round(curNt*0.5),bestV=0;for(let c=0;c<curNt;c+=3){const v=Math.abs(trace.output[r*curNt+c]);if(v>bestV){bestV=v;bestC=c;}}rowOutPeakC[r]=bestC;}
+        // Minimum opacity floor: always show the architecture skeleton
+        const MIN_A = 0.04;
+
+        // W1
+        const w1=layer.w1, step1=Math.max(1,Math.floor(w1.length/500));
+        for(let k=0;k<w1.length;k+=step1){
+            const[src,hid,weight]=w1[k];
+            const raw=rowMaxOut[src]*Math.abs(weight)*connScaleO*2.5;
+            const a=Math.max(Math.min(raw,0.8), MIN_A);
+            const srcZ=rowOutPeakC[src]*colS,hidRow=(hid/layer.w1_rows)*D,yMid=(y1+y2)*0.5,midZ=cols*colS*0.5;
+            const[x1,yy1]=iso(src*rowS,y1,srcZ),[x2,yy2]=iso(hidRow*rowS,yMid,midZ);
+            const[cx1,cy1]=iso(src*rowS,y1+(yMid-y1)*0.4,srcZ+(midZ-srcZ)*0.3);
+            const[cx2,cy2]=iso(hidRow*rowS,y1+(yMid-y1)*0.7,srcZ+(midZ-srcZ)*0.7);
+            ctx.beginPath();ctx.moveTo(x1,yy1);ctx.bezierCurveTo(cx1,cy1,cx2,cy2,x2,yy2);
+            ctx.globalAlpha=a;const hue=Math.max(0,40-a*80);
+            ctx.strokeStyle=`hsl(${hue},85%,${60-a*20}%)`;ctx.lineWidth=0.15+a*0.5;ctx.stroke();
+        }
+        // W2
+        const w2=layer.w2, step2=Math.max(1,Math.floor(w2.length/400));
+        const nextRowMaxD=new Float32Array(D),nextRowPeakC=new Int32Array(D);let nextMax=0;
+        if(nextTrace){for(let r=0;r<D;r++){let mx=0,bestC=Math.round(curNt*0.5);for(let c=0;c<curNt;c+=2){const v=Math.abs(nextTrace.delta[r*curNt+c]);if(v>mx){mx=v;bestC=c;}}nextRowMaxD[r]=mx;nextRowPeakC[r]=bestC;if(mx>nextMax)nextMax=mx;}}
+        const nextBoost=(li+1<NL)?(LAYER_BOOST[li+1]||1):1;
+        const w2Scale=(nextMax>0.01?0.6/nextMax:connScaleD)*nextBoost;
+        for(let k=0;k<w2.length;k+=step2){
+            const[hid,dst,weight]=w2[k],dstC=Math.min(dst,D-1);
+            // Use BOTH: source layer output (what FFN read) and next layer delta
+            const srcA = rowMaxOut[Math.min(Math.round((hid/layer.w1_rows)*D), D-1)];
+            const dstD = nextTrace ? nextRowMaxD[dstC] : rowMaxD[dstC];
+            const combined = Math.max(srcA * connScaleO, dstD * w2Scale) * Math.abs(weight);
+            const a = Math.max(Math.min(combined * 1.5, 0.7), MIN_A);
+            const hidRow=(hid/layer.w1_rows)*D,yMid=(y1+y2)*0.5,midZ=cols*colS*0.5;
+            const dstZ=(nextTrace?nextRowPeakC[dstC]:rowPeakC[dstC])*colS;
+            const[x1,yy1]=iso(hidRow*rowS,yMid,midZ),[x2,yy2]=iso(dst*rowS,y2,dstZ);
+            const[cx1,cy1]=iso(hidRow*rowS,yMid+(y2-yMid)*0.35,midZ+(dstZ-midZ)*0.3);
+            const[cx2,cy2]=iso(dst*rowS,yMid+(y2-yMid)*0.7,midZ+(dstZ-midZ)*0.7);
+            ctx.beginPath();ctx.moveTo(x1,yy1);ctx.bezierCurveTo(cx1,cy1,cx2,cy2,x2,yy2);
+            ctx.globalAlpha=a;const hue=Math.max(140,180-a*80);
+            ctx.strokeStyle=`hsl(${hue},70%,${55-a*15}%)`;ctx.lineWidth=0.15+a*0.5;ctx.stroke();
+        }
+        // V arcs
+        for(const head of layer.heads){if(!head.active)continue;
+            for(const[src,dst,weight] of head.v_connections){
+                let maxD=0;for(let c=0;c<curNt;c+=4)maxD=Math.max(maxD,Math.abs(trace.attnDelta[src*curNt+c]));
+                const rawA=maxD*Math.abs(weight), aNorm=globalMaxD>0.01?rawA/globalMaxD:rawA*30;
+                const a=Math.max(Math.min(aNorm*1.5,0.8), MIN_A);
+                const srcZ=rowPeakC[src]*colS,dstZ=rowPeakC[Math.min(dst,D-1)]*colS;
+                const[x1,yy1]=iso(src*rowS,y1,srcZ),[x2,yy2]=iso(dst*rowS,y1,dstZ);
+                const arcH=Math.abs(dst-src)*rowS*0.12+6;
+                ctx.beginPath();ctx.moveTo(x1,yy1);ctx.bezierCurveTo(x1,yy1-arcH,x2,yy2-arcH,x2,yy2);
+                ctx.globalAlpha=a;ctx.strokeStyle=`hsl(${260-a*30},65%,${60-a*15}%)`;ctx.lineWidth=0.2+a*0.8;ctx.stroke();
+            }
+        }
+        ctx.globalAlpha=1;
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // FRAME + UI
+    // ═══════════════════════════════════════════════════════
+    function drawFrame() { if (view3D) draw3D(); else draw2D(); }
+
+    function updateUI() {
+        document.getElementById('statSteps').textContent = totalSteps;
+        document.getElementById('statComps').textContent = comparisons;
+        const sorted = arr.every((v,i) => i === 0 || v >= arr[i-1]);
+        document.getElementById('statStatus').textContent = sorted && totalSteps > 0 ? 'Sorted!' : 'Running';
+        // Highlight current source line
+        if (stateTensor && compileResult) {
+            const pc = sparseEngine.getPC(stateTensor, compileResult.config.idx_pc, compileResult.config.logn);
+            const line = sourceMap[pc] || 0;
+            highlightCodeLine('codeBody', line);
+        }
+        const el = document.getElementById('sortBars'); el.innerHTML = '';
+        const mx = Math.max(...arr, 1);
+        for (let i = 0; i < arr.length; i++) {
+            const bar = document.createElement('div'); bar.className = 'sort-bar';
+            bar.style.height = ((arr[i]/mx)*100)+'%';
+            const sorted2 = arr.slice(0, i+1).every((v,j) => j===0 || v >= arr[j-1]) && i < arr.length -1;
+            bar.style.background = `hsl(${(arr[i]/mx)*240},65%,52%)`;
+            const lbl = document.createElement('div'); lbl.className = 'sort-bar-value'; lbl.textContent = arr[i];
+            bar.appendChild(lbl); el.appendChild(bar);
+        }
+    }
+
+    document.getElementById('btnStep').addEventListener('click', () => { if (!running) { doStepUntilSwap(); updateUI(); } });
+    document.getElementById('btnSort').addEventListener('click', async () => {
+        if (running) { running = false; return; }
+        running = true; document.getElementById('btnSort').textContent = 'Stop';
+        while (running && doStepUntilSwap()) {
+            updateUI();
+            await new Promise(r => setTimeout(r, Math.max(5, 200 - parseInt(document.getElementById('speedSlider').value)*2)));
+        }
+        running = false; document.getElementById('btnSort').textContent = 'Sort'; updateUI();
+    });
+    document.getElementById('btnReset').addEventListener('click', () => { running = false; document.getElementById('btnSort').textContent = 'Sort'; shuffle(); });
+    document.getElementById('sizeSelect').addEventListener('change', e => { arrSize = parseInt(e.target.value); shuffle(); });
+    document.getElementById('btnView').addEventListener('click', function() {
+        view3D = !view3D;
+        this.textContent = view3D ? '2D View' : '3D View';
+        document.getElementById('legend2d').style.display = view3D ? 'none' : '';
+        document.getElementById('legend3d').style.display = view3D ? '' : 'none';
+    });
+
+    shuffle();
+    function animate() { drawFrame(); requestAnimationFrame(animate); }
+    animate();
+    })();
+    </script>
+</body>
+</html>

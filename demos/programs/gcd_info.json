@@ -1,0 +1,48 @@
+{
+  "name": "gcd",
+  "title": "GCD (Euclid)",
+  "description": "Greatest common divisor of 48 and 18",
+  "source": "int main() {\n    int a = 48;\n    int b = 18;\n    while (b != 0) {\n        int t = a;\n        while (t >= b) {\n            t = t - b;\n        }\n        a = b;\n        b = t;\n    }\n    return a;\n}\n",
+  "variables": {
+    "a": 9,
+    "b": 11,
+    "t": 13
+  },
+  "num_instructions": 18,
+  "opcode_counts": {
+    "MOV": 10,
+    "SUB": 3,
+    "JZ": 1,
+    "CMP": 1,
+    "JMP": 2,
+    "HALT": 1
+  },
+  "source_map": {
+    "96": 2,
+    "97": 3,
+    "98": 4,
+    "101": 5,
+    "102": 6,
+    "105": 7,
+    "109": 9,
+    "110": 10,
+    "112": 12
+  },
+  "retval_addr": 7,
+  "output_addr": 8,
+  "expected": {
+    "RETVAL": 6
+  },
+  "config": {
+    "s": 32,
+    "m": 64,
+    "n": 1024,
+    "N": 8,
+    "d_model": 155,
+    "logn": 10,
+    "idx_memory": 30,
+    "idx_pc": 84,
+    "idx_pos_enc": 94,
+    "idx_tag": 146
+  }
+}

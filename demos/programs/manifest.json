@@ -1,0 +1,32 @@
+{
+  "fibonacci": {
+    "title": "Fibonacci",
+    "description": "Compute the 7th Fibonacci number",
+    "state_file": "fibonacci_state.json",
+    "info_file": "fibonacci_info.json"
+  },
+  "gcd": {
+    "title": "GCD (Euclid)",
+    "description": "Greatest common divisor of 48 and 18",
+    "state_file": "gcd_state.json",
+    "info_file": "gcd_info.json"
+  },
+  "primes": {
+    "title": "Prime Counter",
+    "description": "Count primes up to 10",
+    "state_file": "primes_state.json",
+    "info_file": "primes_info.json"
+  },
+  "collatz": {
+    "title": "Collatz Steps",
+    "description": "Count Collatz steps for n=6 (6->3->10->5->16->8->4->2->1 = 8 steps)",
+    "state_file": "collatz_state.json",
+    "info_file": "collatz_info.json"
+  },
+  "bubblesort": {
+    "title": "Bubble Sort",
+    "description": "Sort 6 numbers using bubble sort",
+    "state_file": "bubblesort_state.json",
+    "info_file": "bubblesort_info.json"
+  }
+}

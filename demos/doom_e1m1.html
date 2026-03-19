@@ -1,0 +1,2475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOOM E1M1 — Loom</title>
+    <link rel="stylesheet" href="common.css">
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <script src="c_compiler.js"></script>
+    <script src="isa_interpreter.js"></script>
+    <script src="common.js"></script>
+    <style>
+        .game-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+        .viewport-container {
+            background: #000; border-radius: 10px; overflow: hidden;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5); position: relative; width: min(640px, 100%);
+        }
+        #viewport { display: block; image-rendering: pixelated; width: min(640px, 100%); height: 400px; }
+        .doom-statusbar { height: 64px; background: #4b4b4b; width: min(640px, 100%); overflow: hidden; }
+        .doom-statusbar canvas { display: block; image-rendering: pixelated; width: min(640px, 100%); height: 64px; }
+        .hud-section { display: flex; align-items: center; gap: 8px; }
+        .hud-label { font-size: 9px; color: #aaa; text-transform: uppercase; letter-spacing: 0.05em; }
+        .hud-value { font-size: 18px; font-weight: 700; min-width: 30px; text-align: center; }
+        .hud-health { color: #ef4444; }
+        .hud-ammo { color: #f59e0b; }
+        .hud-armor { color: #3b82f6; }
+        .minimap-container {
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .minimap-label { text-align: center; font-size: 0.7rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+        #minimap { display: block; image-rendering: pixelated; border-radius: 4px; }
+        .game-controls {
+            display: flex; gap: 8px; align-items: center; padding: 12px 16px; background: #fff;
+            border: 1px solid #e5e7eb; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); flex-wrap: wrap;
+        }
+        .map-btn {
+            font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 5px 10px; border-radius: 5px;
+            border: 1px solid #d1d5db; background: #fff; cursor: pointer; transition: all 0.15s;
+        }
+        .map-btn:hover { border-color: #93c5fd; background: #eff6ff; }
+        .map-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+        .wad-upload {
+            display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 40px 20px;
+            border: 2px dashed #d1d5db; border-radius: 12px; background: #fafbfc; margin-bottom: 20px;
+        }
+        .wad-upload.loaded { display: none; }
+        .wad-upload label {
+            font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 8px 20px;
+            border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer;
+        }
+        .wad-upload label:hover { background: #2563eb; }
+        .wad-status { font-size: 12px; color: #6b7280; }
+        .disclosure {
+            font-size: 11px; color: #6b7280; background: #f9fafb; border: 1px solid #e5e7eb;
+            border-radius: 8px; padding: 10px 14px; margin-top: 12px; line-height: 1.5;
+        }
+        #gameArea { display: none; }
+        .stat-row { display: flex; gap: 16px; margin-top: 8px; flex-wrap: wrap; }
+        .stat { font-size: 11px; color: #6b7280; }
+        .stat b { color: #374151; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="index.html">DOOM E1M1</a></h1>
+        <p class="subtitle">Real E1M1 from DOOM 1. Enemy AI runs on the Loom ISA interpreter or ONNX backend.</p>
+    </header>
+
+    <div class="wad-upload" id="wadUpload">
+        <div style="font-size:14px;font-weight:600;color:#374151">Loading DOOM...</div>
+        <div class="wad-status" id="wadLoadStatus">Fetching doom1.wad...</div>
+    </div>
+
+    <div id="gameArea">
+        <div class="game-row">
+            <div style="display:flex;flex-direction:column;gap:12px;min-width:240px">
+                <div class="network-panel" id="networkPanel"></div>
+                <div class="minimap-container">
+                    <div class="minimap-label">Automap</div>
+                    <canvas id="minimap" width="200" height="200"></canvas>
+                </div>
+            </div>
+            <div>
+                <div class="viewport-container">
+                    <canvas id="viewport" width="320" height="200"></canvas>
+                </div>
+                <div class="doom-statusbar">
+                    <canvas id="hudCanvas" width="320" height="32"></canvas>
+                </div>
+                <div class="game-controls" style="margin-top:8px">
+                    <span style="font-size:11px;color:#9ca3af">WASD/Arrows move, mouse look, click shoot, E open doors</span>
+                    <button class="map-btn active" id="modeBtn" style="background:#10b981;color:#fff;border-color:#10b981">ISA Interpreter</button>
+                    <span class="stat" id="v4Status" style="display:none"></span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat">Tick: <b id="tickInfo">0</b></span>
+                    <span class="stat">Steps: <b id="stepsInfo">0</b></span>
+                    <span class="stat">Enemies: <b id="enemyInfo">0</b></span>
+                    <span class="stat">Subsectors: <b id="ssInfo">0</b></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="disclosure" style="max-width:640px;margin-top:16px">
+        <b>On the ISA interpreter / ONNX backend:</b> Enemy AI state machines
+        (idle, alert, chase, attack, pain), damage calculation, cooldown timers,
+        and player HP/armor/ammo tracking, compiled from C to the 22-opcode ISA.<br>
+        <b>In JavaScript:</b> BSP rendering, floor/ceiling casting, sprite drawing,
+        WAD parsing, collision detection, door mechanics, pathfinding, hitscan,
+        input handling, and HUD.
+    </div>
+
+<script>
+"use strict";
+
+/* ============================================================
+ *  Constants
+ * ============================================================ */
+const SCR_W = 320, SCR_H = 200;
+const FOV = Math.PI / 3;           // 60 degrees
+const HALF_FOV = FOV / 2;
+const PLAYER_HEIGHT = 41;          // DOOM viewheight
+const PLAYER_RADIUS = 16;
+const MOVE_SPEED = 8;
+const TURN_SPEED = 0.06;
+const MOUSE_SENSITIVITY = 0.003;
+const MAX_ENEMIES = 16;
+
+/* ============================================================
+ *  WAD Parsing
+ * ============================================================ */
+let lumpsArr = [];
+let doomPalette = null;
+
+function parseWAD(ab) {
+    const dv = new DataView(ab);
+    const readStr = (off, len) => {
+        let s = '';
+        for (let i = 0; i < len; i++) { const c = dv.getUint8(off+i); if(!c) break; s += String.fromCharCode(c); }
+        return s;
+    };
+    const wt = readStr(0,4);
+    if (wt !== 'IWAD' && wt !== 'PWAD') throw new Error('Invalid WAD');
+    const nl = dv.getInt32(4,true), dirOff = dv.getInt32(8,true);
+    const lumps = [];
+    for (let i = 0; i < nl; i++) {
+        const o = dirOff + i*16;
+        lumps.push({
+            name: readStr(o+8, 8),
+            filePos: dv.getInt32(o, true),
+            size: dv.getInt32(o+4, true),
+            data: ab.slice(dv.getInt32(o, true), dv.getInt32(o, true) + dv.getInt32(o+4, true))
+        });
+    }
+    return lumps;
+}
+
+function extractPalette(lumps) {
+    const lump = lumps.find(l => l.name === 'PLAYPAL');
+    if (!lump) throw new Error('PLAYPAL not found');
+    const dv = new DataView(lump.data);
+    const pal = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+        const r = dv.getUint8(i*3), g = dv.getUint8(i*3+1), b = dv.getUint8(i*3+2);
+        pal[i] = (255 << 24) | (b << 16) | (g << 8) | r;
+    }
+    return pal;
+}
+
+function extractPatchNames(lumps) {
+    const lump = lumps.find(l => l.name === 'PNAMES');
+    if (!lump) return [];
+    const dv = new DataView(lump.data);
+    const count = dv.getInt32(0, true), names = [];
+    for (let i = 0; i < count; i++) {
+        let n = '';
+        for (let j = 0; j < 8; j++) { const c = dv.getUint8(4+i*8+j); if(!c) break; n += String.fromCharCode(c); }
+        names.push(n);
+    }
+    return names;
+}
+
+function parseTextureDefs(lumps) {
+    const defs = [];
+    for (const name of ['TEXTURE1', 'TEXTURE2']) {
+        const lump = lumps.find(l => l.name === name);
+        if (!lump) continue;
+        const dv = new DataView(lump.data);
+        const count = dv.getInt32(0, true);
+        for (let i = 0; i < count; i++) {
+            const texOff = dv.getInt32(4+i*4, true);
+            let texName = '';
+            for (let j = 0; j < 8; j++) { const c = dv.getUint8(texOff+j); if(!c) break; texName += String.fromCharCode(c); }
+            const w = dv.getInt16(texOff+12, true), h = dv.getInt16(texOff+14, true);
+            const pc = dv.getInt16(texOff+20, true), patches = [];
+            for (let p = 0; p < pc; p++) {
+                const po = texOff + 22 + p*10;
+                patches.push({ originX: dv.getInt16(po,true), originY: dv.getInt16(po+2,true), patchNum: dv.getInt16(po+4,true) });
+            }
+            defs.push({ name: texName, width: w, height: h, patches });
+        }
+    }
+    return defs;
+}
+
+function parsePatchSprite(lumpData, palette) {
+    const dv = new DataView(lumpData);
+    const w = dv.getUint16(0,true), h = dv.getUint16(2,true);
+    const leftOff = dv.getInt16(4,true), topOff = dv.getInt16(6,true);
+    const pixels = new Uint32Array(w * h);
+    for (let col = 0; col < w; col++) {
+        let off = dv.getUint32(8 + col*4, true);
+        while (true) {
+            const topDelta = dv.getUint8(off++);
+            if (topDelta === 0xFF) break;
+            const length = dv.getUint8(off++);
+            off++;
+            for (let row = 0; row < length; row++) {
+                const y = topDelta + row;
+                if (y < h) pixels[y * w + col] = palette[dv.getUint8(off)];
+                off++;
+            }
+            off++;
+        }
+    }
+    return { width: w, height: h, leftOffset: leftOff, topOffset: topOff, pixels };
+}
+
+function compositeTexture(texDef, lumps, patchNames, palette) {
+    const { width, height, patches } = texDef;
+    const pixels = new Uint32Array(width * height);
+    for (const p of patches) {
+        const pn = patchNames[p.patchNum];
+        if (!pn) continue;
+        const pl = lumps.find(l => l.name === pn);
+        if (!pl) continue;
+        try {
+            const sprite = parsePatchSprite(pl.data, palette);
+            for (let cy = 0; cy < sprite.height; cy++) {
+                const destY = p.originY + cy;
+                if (destY < 0 || destY >= height) continue;
+                for (let cx = 0; cx < sprite.width; cx++) {
+                    const destX = p.originX + cx;
+                    if (destX < 0 || destX >= width) continue;
+                    const px = sprite.pixels[cy * sprite.width + cx];
+                    if (px) pixels[destY * width + destX] = px;
+                }
+            }
+        } catch(e) {}
+    }
+    return { width, height, pixels };
+}
+
+function extractFlat(lumps, name, palette) {
+    const lump = lumps.find(l => l.name === name);
+    if (!lump || lump.size !== 4096) return null;
+    const raw = new Uint8Array(lump.data);
+    const pixels = new Uint32Array(4096);
+    for (let i = 0; i < 4096; i++) pixels[i] = palette[raw[i]];
+    return pixels;
+}
+
+/* ============================================================
+ *  E1M1 Level Data Extraction
+ * ============================================================ */
+let level = null;  // { vertices, linedefs, sidedefs, sectors, segs, subsectors, nodes, things }
+
+function extractLevel(lumps, mapName) {
+    const idx = lumps.findIndex(l => l.name === mapName);
+    if (idx < 0) throw new Error(`Map ${mapName} not found in WAD`);
+
+    const getLump = (name) => {
+        for (let i = idx + 1; i < Math.min(idx + 15, lumps.length); i++) {
+            if (lumps[i].name === name) return lumps[i];
+        }
+        return null;
+    };
+
+    // VERTEXES
+    const vLump = getLump('VERTEXES');
+    const vDv = new DataView(vLump.data);
+    const vertices = [];
+    for (let i = 0; i < vLump.size / 4; i++) {
+        vertices.push({ x: vDv.getInt16(i*4, true), y: vDv.getInt16(i*4+2, true) });
+    }
+
+    // SECTORS
+    const sLump = getLump('SECTORS');
+    const sDv = new DataView(sLump.data);
+    const sectors = [];
+    for (let i = 0; i < sLump.size / 26; i++) {
+        const o = i * 26;
+        let floorTex = '', ceilTex = '';
+        for (let j = 0; j < 8; j++) { const c = sDv.getUint8(o+4+j); if(!c) break; floorTex += String.fromCharCode(c); }
+        for (let j = 0; j < 8; j++) { const c = sDv.getUint8(o+12+j); if(!c) break; ceilTex += String.fromCharCode(c); }
+        sectors.push({
+            floorHeight: sDv.getInt16(o, true),
+            ceilHeight: sDv.getInt16(o+2, true),
+            floorTex, ceilTex,
+            lightLevel: sDv.getInt16(o+20, true),
+            special: sDv.getInt16(o+22, true),
+            tag: sDv.getInt16(o+24, true),
+        });
+    }
+
+    // SIDEDEFS
+    const sdLump = getLump('SIDEDEFS');
+    const sdDv = new DataView(sdLump.data);
+    const sidedefs = [];
+    for (let i = 0; i < sdLump.size / 30; i++) {
+        const o = i * 30;
+        let upper = '', lower = '', middle = '';
+        for (let j = 0; j < 8; j++) { const c = sdDv.getUint8(o+4+j); if(!c) break; upper += String.fromCharCode(c); }
+        for (let j = 0; j < 8; j++) { const c = sdDv.getUint8(o+12+j); if(!c) break; lower += String.fromCharCode(c); }
+        for (let j = 0; j < 8; j++) { const c = sdDv.getUint8(o+20+j); if(!c) break; middle += String.fromCharCode(c); }
+        sidedefs.push({
+            xOff: sdDv.getInt16(o, true),
+            yOff: sdDv.getInt16(o+2, true),
+            upper, lower, middle,
+            sector: sdDv.getInt16(o+28, true),
+        });
+    }
+
+    // LINEDEFS
+    const lLump = getLump('LINEDEFS');
+    const lDv = new DataView(lLump.data);
+    const linedefs = [];
+    for (let i = 0; i < lLump.size / 14; i++) {
+        const o = i * 14;
+        linedefs.push({
+            v1: lDv.getUint16(o, true),
+            v2: lDv.getUint16(o+2, true),
+            flags: lDv.getInt16(o+4, true),
+            special: lDv.getInt16(o+6, true),
+            tag: lDv.getInt16(o+8, true),
+            frontSide: lDv.getInt16(o+10, true),
+            backSide: lDv.getInt16(o+12, true),
+        });
+    }
+
+    // SEGS
+    const sgLump = getLump('SEGS');
+    const sgDv = new DataView(sgLump.data);
+    const segs = [];
+    for (let i = 0; i < sgLump.size / 12; i++) {
+        const o = i * 12;
+        segs.push({
+            v1: sgDv.getInt16(o, true),
+            v2: sgDv.getInt16(o+2, true),
+            angle: sgDv.getInt16(o+4, true),
+            linedef: sgDv.getInt16(o+6, true),
+            direction: sgDv.getInt16(o+8, true),
+            offset: sgDv.getInt16(o+10, true),
+        });
+    }
+
+    // SSECTORS (subsectors)
+    const ssLump = getLump('SSECTORS');
+    const ssDv = new DataView(ssLump.data);
+    const subsectors = [];
+    for (let i = 0; i < ssLump.size / 4; i++) {
+        const o = i * 4;
+        subsectors.push({
+            numSegs: ssDv.getInt16(o, true),
+            firstSeg: ssDv.getInt16(o+2, true),
+        });
+    }
+
+    // NODES
+    const nLump = getLump('NODES');
+    const nDv = new DataView(nLump.data);
+    const nodes = [];
+    for (let i = 0; i < nLump.size / 28; i++) {
+        const o = i * 28;
+        nodes.push({
+            x: nDv.getInt16(o, true),
+            y: nDv.getInt16(o+2, true),
+            dx: nDv.getInt16(o+4, true),
+            dy: nDv.getInt16(o+6, true),
+            rightBox: [nDv.getInt16(o+8,true), nDv.getInt16(o+10,true), nDv.getInt16(o+12,true), nDv.getInt16(o+14,true)],
+            leftBox: [nDv.getInt16(o+16,true), nDv.getInt16(o+18,true), nDv.getInt16(o+20,true), nDv.getInt16(o+22,true)],
+            rightChild: nDv.getUint16(o+24, true),
+            leftChild: nDv.getUint16(o+26, true),
+        });
+    }
+
+    // THINGS
+    const tLump = getLump('THINGS');
+    const tDv = new DataView(tLump.data);
+    const things = [];
+    for (let i = 0; i < tLump.size / 10; i++) {
+        const o = i * 10;
+        things.push({
+            x: tDv.getInt16(o, true),
+            y: tDv.getInt16(o+2, true),
+            angle: tDv.getInt16(o+4, true),
+            type: tDv.getInt16(o+6, true),
+            flags: tDv.getInt16(o+8, true),
+        });
+    }
+
+    return { vertices, linedefs, sidedefs, sectors, segs, subsectors, nodes, things };
+}
+
+/* ============================================================
+ *  Texture Cache
+ * ============================================================ */
+let patchNames = [];
+let textureDefs = [];
+const textureCache = {};
+const flatCache = {};
+
+function getTexture(name) {
+    if (!name || name === '-') return null;
+    if (textureCache[name]) return textureCache[name];
+    const def = textureDefs.find(t => t.name === name);
+    if (def) {
+        textureCache[name] = compositeTexture(def, lumpsArr, patchNames, doomPalette);
+        return textureCache[name];
+    }
+    return null;
+}
+
+function getFlat(name) {
+    if (!name || name === '-') return null;
+    if (flatCache[name]) return flatCache[name];
+    const f = extractFlat(lumpsArr, name, doomPalette);
+    if (f) { flatCache[name] = f; return f; }
+    return null;
+}
+
+/* ============================================================
+ *  Player State
+ * ============================================================ */
+let playerX = 0, playerY = 0, playerZ = 0;
+let playerAngle = 0;
+let playerSector = -1;
+
+/* ============================================================
+ *  BSP Renderer
+ * ============================================================ */
+const vpCanvas = document.getElementById('viewport');
+const vpCtx = vpCanvas.getContext('2d');
+const vpImageData = vpCtx.createImageData(SCR_W, SCR_H);
+const vpPixels = new Uint32Array(vpImageData.data.buffer);
+
+// Occlusion tracking: top/bottom clip for each screen column
+let clipTop = new Int32Array(SCR_W);
+let clipBot = new Int32Array(SCR_W);
+let zBuffer = new Float64Array(SCR_W);
+let columnsRendered = 0;
+
+function resetClip() {
+    clipTop.fill(0);
+    clipBot.fill(SCR_H);
+    zBuffer.fill(Infinity);
+    columnsRendered = 0;
+}
+
+function allColumnsFilled() {
+    for (let i = 0; i < SCR_W; i++) {
+        if (clipTop[i] < clipBot[i]) return false;
+    }
+    return true;
+}
+
+// Point-on-side test for BSP
+function pointOnSide(x, y, node) {
+    const dx = x - node.x;
+    const dy = y - node.y;
+    // Cross product: if > 0, point is on right (front) side
+    return (dx * node.dy - dy * node.dx) <= 0 ? 1 : 0;
+}
+
+// Check if bounding box is potentially visible
+function checkBBox(box, px, py, pa) {
+    // box: [top, bottom, left, right] in DOOM format
+    // Simplified: always return true for correctness, optimize later
+    return true;
+}
+
+// Angle from player to a point
+function angleToPoint(px, py, tx, ty) {
+    return Math.atan2(ty - py, tx - px);
+}
+
+// Normalize angle to [-PI, PI]
+function normalizeAngle(a) {
+    while (a > Math.PI) a -= 2 * Math.PI;
+    while (a < -Math.PI) a += 2 * Math.PI;
+    return a;
+}
+
+// Screen X from angle
+function angleToScreenX(angle) {
+    const t = Math.tan(angle);
+    const x = SCR_W / 2 - t * (SCR_W / 2) / Math.tan(HALF_FOV);
+    return Math.round(x);
+}
+
+function applyLight(color, dist, lightLevel) {
+    // DOOM-style lighting: sector light level with distance dimming
+    const baseFactor = lightLevel / 255;
+    const distDim = Math.max(0, 1.0 - dist / 1600);
+    const factor = Math.min(1.0, Math.max(0.06, baseFactor * (0.4 + 0.6 * distDim)));
+    const r = ((color) & 0xFF) * factor;
+    const g = ((color >> 8) & 0xFF) * factor;
+    const b = ((color >> 16) & 0xFF) * factor;
+    return (255 << 24) | ((b & 0xFF) << 16) | ((g & 0xFF) << 8) | (r & 0xFF);
+}
+
+let ssRendered = 0;
+
+function renderBSP() {
+    resetClip();
+    vpPixels.fill(0xFF000000);
+    ssRendered = 0;
+    if (level.nodes.length > 0) {
+        renderNode(level.nodes.length - 1);
+    }
+    document.getElementById('ssInfo').textContent = ssRendered;
+}
+
+function renderNode(nodeIdx) {
+    if (allColumnsFilled()) return;
+
+    // Check if this is a subsector
+    if (nodeIdx & 0x8000) {
+        const ssIdx = nodeIdx & 0x7FFF;
+        renderSubsector(ssIdx);
+        return;
+    }
+
+    if (nodeIdx >= level.nodes.length) return;
+    const node = level.nodes[nodeIdx];
+    const side = pointOnSide(playerX, playerY, node);
+
+    // Render front side first (closer)
+    if (side === 0) {
+        renderNode(node.rightChild);
+        if (!allColumnsFilled()) renderNode(node.leftChild);
+    } else {
+        renderNode(node.leftChild);
+        if (!allColumnsFilled()) renderNode(node.rightChild);
+    }
+}
+
+function renderSubsector(ssIdx) {
+    if (ssIdx >= level.subsectors.length) return;
+    const ss = level.subsectors[ssIdx];
+    ssRendered++;
+
+    for (let i = 0; i < ss.numSegs; i++) {
+        const segIdx = ss.firstSeg + i;
+        if (segIdx >= level.segs.length) continue;
+        renderSeg(level.segs[segIdx], ssIdx);
+    }
+}
+
+function renderSeg(seg, ssIdx) {
+    const v1 = level.vertices[seg.v1];
+    const v2 = level.vertices[seg.v2];
+    if (!v1 || !v2) return;
+
+    // Transform to player-relative angles
+    let angle1 = angleToPoint(playerX, playerY, v1.x, v1.y) - playerAngle;
+    let angle2 = angleToPoint(playerX, playerY, v2.x, v2.y) - playerAngle;
+    angle1 = normalizeAngle(angle1);
+    angle2 = normalizeAngle(angle2);
+
+    // Check span direction (must go left to right on screen)
+    let span = normalizeAngle(angle1 - angle2);
+    if (span <= 0) return;
+
+    // Clip to FOV
+    if (angle1 > HALF_FOV) {
+        if (angle2 > HALF_FOV) return;
+        angle1 = HALF_FOV;
+    }
+    if (angle2 < -HALF_FOV) {
+        if (angle1 < -HALF_FOV) return;
+        angle2 = -HALF_FOV;
+    }
+
+    // Convert to screen X
+    const x1 = angleToScreenX(angle1);
+    const x2 = angleToScreenX(angle2);
+    if (x1 >= x2) return;
+
+    // Get linedef info
+    const ld = level.linedefs[seg.linedef];
+    if (!ld) return;
+    const sideIdx = seg.direction === 0 ? ld.frontSide : ld.backSide;
+    if (sideIdx < 0 || sideIdx >= level.sidedefs.length) return;
+    const side = level.sidedefs[sideIdx];
+    const sector = level.sectors[side.sector];
+    if (!sector) return;
+
+    const isTwoSided = ld.backSide >= 0 && ld.frontSide >= 0;
+    let backSector = null;
+    if (isTwoSided) {
+        const backSideIdx = seg.direction === 0 ? ld.backSide : ld.frontSide;
+        if (backSideIdx >= 0 && backSideIdx < level.sidedefs.length) {
+            backSector = level.sectors[level.sidedefs[backSideIdx].sector];
+        }
+    }
+
+    // Seg direction vector and length
+    const segDx = v2.x - v1.x, segDy = v2.y - v1.y;
+    const segLen = Math.sqrt(segDx * segDx + segDy * segDy);
+
+    for (let screenX = Math.max(0, x1); screenX < Math.min(SCR_W, x2); screenX++) {
+        if (clipTop[screenX] >= clipBot[screenX]) continue;
+
+        // Column ray angle
+        const colAngle = HALF_FOV - (screenX / SCR_W) * FOV;
+        const rayAngle = playerAngle + colAngle;
+        const rayDx = Math.cos(rayAngle), rayDy = Math.sin(rayAngle);
+
+        // Intersect ray with seg line: P + t*ray = V1 + u*seg
+        const denom = rayDx * segDy - rayDy * segDx;
+        if (Math.abs(denom) < 0.0001) continue;
+        const t = ((v1.x - playerX) * segDy - (v1.y - playerY) * segDx) / denom;
+        if (t < 1) continue; // behind player
+
+        // u = position along seg [0..1]
+        const u = ((v1.x - playerX) * rayDy - (v1.y - playerY) * rayDx) / denom;
+
+        // Perpendicular distance (corrects fisheye)
+        let perpDist = t * Math.cos(colAngle);
+        if (perpDist < 1) perpDist = 1;
+
+        const scale = (SCR_H / 2) / perpDist * 64;
+        const floorH = sector.floorHeight;
+        const ceilH = sector.ceilHeight;
+        const light = sector.lightLevel;
+
+        // Wall top and bottom in screen coords
+        const wallTopY = Math.floor(SCR_H / 2 - (ceilH - playerZ) * scale / 64);
+        const wallBotY = Math.floor(SCR_H / 2 - (floorH - playerZ) * scale / 64);
+
+        // Texture X coordinate from seg intersection
+        let texX = seg.offset + u * segLen + side.xOff;
+
+        const ct = clipTop[screenX];
+        const cb = clipBot[screenX];
+
+        if (!isTwoSided || !backSector) {
+            // Solid wall - store depth for sprite occlusion
+            zBuffer[screenX] = Math.min(zBuffer[screenX], perpDist);
+
+            const tex = getTexture(side.middle);
+            const yStart = Math.max(ct, wallTopY);
+            const yEnd = Math.min(cb, wallBotY);
+
+            drawCeilingColumn(screenX, ct, Math.min(cb, wallTopY), sector, rayAngle, perpDist);
+            drawFloorColumn(screenX, Math.max(ct, wallBotY), cb, sector, rayAngle, perpDist);
+
+            if (tex && yStart < yEnd) {
+                const wallH = wallBotY - wallTopY;
+                const txMod = ((Math.floor(texX) % tex.width) + tex.width) % tex.width;
+                for (let y = yStart; y < yEnd; y++) {
+                    const texY = ((y - wallTopY) / wallH * tex.height) | 0;
+                    const ty = ((texY + (side.yOff || 0)) % tex.height + tex.height) % tex.height;
+                    const texel = tex.pixels[ty * tex.width + txMod];
+                    vpPixels[y * SCR_W + screenX] = texel ? applyLight(texel, perpDist, light) : applyLight(0xFF808080, perpDist, light);
+                }
+            } else {
+                const color = applyLight(0xFF808060, perpDist, light);
+                for (let y = yStart; y < yEnd; y++) {
+                    vpPixels[y * SCR_W + screenX] = color;
+                }
+            }
+
+            clipTop[screenX] = cb;
+        } else {
+            // Two-sided linedef
+            const backFloorH = backSector.floorHeight;
+            const backCeilH = backSector.ceilHeight;
+            const backWallTopY = Math.floor(SCR_H / 2 - (backCeilH - playerZ) * scale / 64);
+            const backWallBotY = Math.floor(SCR_H / 2 - (backFloorH - playerZ) * scale / 64);
+
+            // Draw front sector ceiling visplane (down to THIS sector's ceiling line)
+            drawCeilingColumn(screenX, ct, Math.min(cb, wallTopY), sector, rayAngle, perpDist);
+
+            // Draw front sector floor visplane (from THIS sector's floor line down)
+            drawFloorColumn(screenX, Math.max(ct, wallBotY), cb, sector, rayAngle, perpDist);
+
+            // Upper wall (front ceiling higher than back ceiling)
+            // Don't write z-buffer: partial column occluder, sprites above may be visible
+            if (backCeilH < ceilH) {
+                const tex = getTexture(side.upper);
+                const yStart = Math.max(ct, wallTopY);
+                const yEnd = Math.min(cb, backWallTopY);
+                if (yStart < yEnd) {
+                    if (tex) {
+                        const unpegged = (ld.flags & 0x0008);
+                        const wallPixelH = ceilH - backCeilH; // world units of upper wall
+                        const txMod = ((Math.floor(texX) % tex.width) + tex.width) % tex.width;
+                        const screenWallH = backWallTopY - wallTopY || 1;
+                        for (let y = yStart; y < yEnd; y++) {
+                            let texY;
+                            if (unpegged) {
+                                // Anchored to top of front ceiling — fixed as door moves
+                                const frac = (y - wallTopY) / screenWallH;
+                                texY = (frac * wallPixelH) | 0;
+                            } else {
+                                // Anchored to bottom (opening edge) — texture peels up with door
+                                const frac = (y - wallTopY) / screenWallH;
+                                texY = ((tex.height - wallPixelH) + frac * wallPixelH) | 0;
+                            }
+                            const ty = ((texY + (side.yOff || 0)) % tex.height + tex.height) % tex.height;
+                            const texel = tex.pixels[ty * tex.width + txMod];
+                            vpPixels[y * SCR_W + screenX] = texel ? applyLight(texel, perpDist, light) : applyLight(0xFF808080, perpDist, light);
+                        }
+                    } else {
+                        const color = applyLight(0xFF606080, perpDist, light);
+                        for (let y = yStart; y < yEnd; y++) vpPixels[y * SCR_W + screenX] = color;
+                    }
+                }
+            }
+
+            // Lower wall (back floor higher than front floor - steps up)
+            // Don't write z-buffer: partial column occluder, sprites below may be visible
+            if (backFloorH > floorH) {
+                const tex = getTexture(side.lower);
+                const yStart = Math.max(ct, backWallBotY);
+                const yEnd = Math.min(cb, wallBotY);
+                if (yStart < yEnd) {
+                    if (tex) {
+                        const lowerUnpegged = (ld.flags & 0x0010);
+                        const wallH = wallBotY - backWallBotY || 1;
+                        const txMod = ((Math.floor(texX) % tex.width) + tex.width) % tex.width;
+                        for (let y = yStart; y < yEnd; y++) {
+                            let texY;
+                            if (lowerUnpegged) {
+                                texY = (tex.height - wallH + (y - backWallBotY)) | 0;
+                            } else {
+                                texY = ((y - backWallBotY) / wallH * tex.height) | 0;
+                            }
+                            const ty = ((texY + (side.yOff || 0)) % tex.height + tex.height) % tex.height;
+                            const texel = tex.pixels[ty * tex.width + txMod];
+                            vpPixels[y * SCR_W + screenX] = texel ? applyLight(texel, perpDist, light) : applyLight(0xFF808080, perpDist, light);
+                        }
+                    } else {
+                        const color = applyLight(0xFF806040, perpDist, light);
+                        for (let y = yStart; y < yEnd; y++) vpPixels[y * SCR_W + screenX] = color;
+                    }
+                }
+            }
+
+            // Narrow clip window to the opening between front and back sectors
+            // Opening top = lower of the two ceilings, opening bottom = higher of the two floors
+            const openTop = Math.max(wallTopY, backWallTopY);
+            const openBot = Math.min(wallBotY, backWallBotY);
+            clipTop[screenX] = Math.max(clipTop[screenX], openTop);
+            clipBot[screenX] = Math.min(clipBot[screenX], openBot);
+
+            // If opening is closed (door shut, etc.), block sprites too
+            if (openTop >= openBot) {
+                zBuffer[screenX] = Math.min(zBuffer[screenX], perpDist);
+            }
+
+            if (clipTop[screenX] >= clipBot[screenX]) {
+                clipTop[screenX] = clipBot[screenX];
+            }
+        }
+    }
+}
+
+function drawCeilingColumn(screenX, yStart, yEnd, sector, rayAngle, wallDist) {
+    if (yStart >= yEnd) return;
+    const flat = getFlat(sector.ceilTex);
+    const light = sector.lightLevel;
+    const cosA = Math.cos(rayAngle), sinA = Math.sin(rayAngle);
+    const halfH = SCR_H / 2;
+    // Column angle for fisheye correction
+    const colAngle = HALF_FOV - (screenX / SCR_W) * FOV;
+    const cosCol = Math.cos(colAngle);
+
+    if (sector.ceilTex === 'F_SKY1') {
+        for (let y = yStart; y < yEnd; y++) {
+            const t = y / SCR_H;
+            const r = 40 + 60 * (1 - t), g = 60 + 100 * (1 - t), b = 120 + 130 * (1 - t);
+            vpPixels[y * SCR_W + screenX] = (255 << 24) | ((b&0xFF) << 16) | ((g&0xFF) << 8) | (r&0xFF);
+        }
+        return;
+    }
+
+    const ceilDelta = sector.ceilHeight - playerZ;
+    for (let y = yStart; y < yEnd; y++) {
+        const dy = halfH - y;
+        if (dy <= 0) continue;
+        // perpDist to ceiling at this scanline
+        const perpDist = ceilDelta * halfH / dy;
+        if (perpDist < 0) continue;
+        // Convert perpendicular distance to actual ray distance
+        const rayDist = perpDist / cosCol;
+        const floorX = playerX + rayDist * cosA;
+        const floorY = playerY + rayDist * sinA;
+        if (flat) {
+            const tx = ((Math.floor(floorX) % 64) + 64) % 64;
+            const ty = ((Math.floor(floorY) % 64) + 64) % 64;
+            vpPixels[y * SCR_W + screenX] = applyLight(flat[ty * 64 + tx], perpDist, light);
+        } else {
+            vpPixels[y * SCR_W + screenX] = applyLight(0xFF404060, perpDist, light);
+        }
+    }
+}
+
+function drawFloorColumn(screenX, yStart, yEnd, sector, rayAngle, wallDist) {
+    if (yStart >= yEnd) return;
+    const flat = getFlat(sector.floorTex);
+    const light = sector.lightLevel;
+    const cosA = Math.cos(rayAngle), sinA = Math.sin(rayAngle);
+    const halfH = SCR_H / 2;
+    // Column angle for fisheye correction
+    const colAngle = HALF_FOV - (screenX / SCR_W) * FOV;
+    const cosCol = Math.cos(colAngle);
+
+    const floorDelta = playerZ - sector.floorHeight;
+    for (let y = yStart; y < yEnd; y++) {
+        const dy = y - halfH;
+        if (dy <= 0) continue;
+        // perpDist to floor at this scanline
+        const perpDist = floorDelta * halfH / dy;
+        if (perpDist < 0) continue;
+        // Convert perpendicular distance to actual ray distance
+        const rayDist = perpDist / cosCol;
+        const floorX = playerX + rayDist * cosA;
+        const floorY = playerY + rayDist * sinA;
+        if (flat) {
+            const tx = ((Math.floor(floorX) % 64) + 64) % 64;
+            const ty = ((Math.floor(floorY) % 64) + 64) % 64;
+            vpPixels[y * SCR_W + screenX] = applyLight(flat[ty * 64 + tx], perpDist, light);
+        } else {
+            vpPixels[y * SCR_W + screenX] = applyLight(0xFF404040, perpDist, light);
+        }
+    }
+}
+
+/* ============================================================
+ *  Sprite / Weapon / HUD Data
+ * ============================================================ */
+let shotgunFrames = [];
+let shotgunCanvases = [];
+let enemySprites = [[], []];
+let enemyAttackSprites = [null, null];
+let enemyPainSprites = [null, null];
+let enemyDeadSprites = [[], []];
+let enemySpriteCanvases = {};
+let hudBarSprite = null;
+let hudNumbers = [];
+let hudFaces = [];
+let shootTimer = 0;
+const SHOOT_RENDER_FRAMES = 24;
+let renderFrame = 0;
+const SHOTGUN_NAMES = ['SHTGA0', 'SHTGB0', 'SHTGC0', 'SHTGD0'];
+const FACE_NAMES = ['STFST01', 'STFST00', 'STFST02', 'STFTR00', 'STFKILL0', 'STFOUCH0'];
+let isFaceOuch = false;
+let enemyDeathTimers = [];
+const DEATH_RENDER_FRAMES = 40;
+
+function cacheSpriteCanvas(key, sprite) {
+    if (!sprite) return;
+    const tc = document.createElement('canvas');
+    tc.width = sprite.width; tc.height = sprite.height;
+    const tctx = tc.getContext('2d');
+    const id = tctx.createImageData(sprite.width, sprite.height);
+    const d32 = new Uint32Array(id.data.buffer);
+    for (let i = 0; i < sprite.pixels.length; i++) d32[i] = sprite.pixels[i];
+    tctx.putImageData(id, 0, 0);
+    enemySpriteCanvases[key] = { canvas: tc, sprite };
+}
+
+function cacheShotgunCanvases() {
+    shotgunCanvases = shotgunFrames.map(frame => {
+        const tc = document.createElement('canvas');
+        tc.width = frame.width; tc.height = frame.height;
+        const tctx = tc.getContext('2d');
+        const id = tctx.createImageData(frame.width, frame.height);
+        const d32 = new Uint32Array(id.data.buffer);
+        for (let i = 0; i < frame.pixels.length; i++) d32[i] = frame.pixels[i];
+        tctx.putImageData(id, 0, 0);
+        return tc;
+    });
+}
+
+function loadSpritesAndHUD() {
+    // Shotgun sprites
+    for (const name of SHOTGUN_NAMES) {
+        const lump = lumpsArr.find(l => l.name === name);
+        if (lump && lump.size > 8) {
+            try { shotgunFrames.push(parsePatchSprite(lump.data, doomPalette)); } catch(e) {}
+        }
+    }
+    // Fallback to pistol if no shotgun
+    if (shotgunFrames.length === 0) {
+        for (const name of ['PISGA0','PISGB0','PISGC0','PISGD0','PISGE0']) {
+            const lump = lumpsArr.find(l => l.name === name);
+            if (lump && lump.size > 8) {
+                try { shotgunFrames.push(parsePatchSprite(lump.data, doomPalette)); } catch(e) {}
+            }
+            if (shotgunFrames.length >= 2) break;
+        }
+    }
+    cacheShotgunCanvases();
+
+    // Status bar
+    const stbar = lumpsArr.find(l => l.name === 'STBAR');
+    if (stbar && stbar.size > 8) {
+        try { hudBarSprite = parsePatchSprite(stbar.data, doomPalette); } catch(e) {}
+    }
+
+    // HUD numbers (STTNUM0-9)
+    for (let i = 0; i <= 9; i++) {
+        const lump = lumpsArr.find(l => l.name === 'STTNUM' + i);
+        if (lump && lump.size > 8) {
+            try { hudNumbers.push(parsePatchSprite(lump.data, doomPalette)); } catch(e) { hudNumbers.push(null); }
+        } else { hudNumbers.push(null); }
+    }
+    const pctLump = lumpsArr.find(l => l.name === 'STTPRCNT');
+    if (pctLump && pctLump.size > 8) {
+        try { hudNumbers[10] = parsePatchSprite(pctLump.data, doomPalette); } catch(e) {}
+    }
+
+    // Face sprites
+    for (const name of FACE_NAMES) {
+        const lump = lumpsArr.find(l => l.name === name);
+        if (lump && lump.size > 8) {
+            try { hudFaces.push(parsePatchSprite(lump.data, doomPalette)); } catch(e) { hudFaces.push(null); }
+        } else { hudFaces.push(null); }
+    }
+
+    // Enemy sprites — zombieman (POSS) and sergeant/imp (SPOS/TROO)
+    const ENEMY_SPRITE_SETS = [
+        { walk: ['POSSA1','POSSB1','POSSC1','POSSD1','POSSA0','POSSB0','POSSC0','POSSD0'],
+          attack: ['POSSE0','POSSE1','POSSF0','POSSF1'],
+          pain: ['POSSG0','POSSG1'],
+          dead: ['POSSH0','POSSH1','POSSI0','POSSI1','POSSJ0','POSSJ1',
+                 'POSSK0','POSSK1','POSSL0','POSSL1'] },
+        { walk: ['SPOSA1','SPOSB1','SPOSC1','SPOSD1','TROOA1','TROOB1','TROOC1','TROOD1',
+                 'SPOSA0','SPOSB0','SPOSC0','SPOSD0','TROOA0','TROOB0','TROOC0','TROOD0'],
+          attack: ['SPOSE0','SPOSE1','SPOSF0','SPOSF1','TROOE0','TROOE1','TROOF0','TROOF1'],
+          pain: ['SPOSG0','SPOSG1','TROOG0','TROOG1'],
+          dead: ['SPOSH0','SPOSH1','SPOSI0','SPOSI1','SPOSJ0','SPOSJ1',
+                 'SPOSK0','SPOSK1','SPOSL0','SPOSL1',
+                 'TROOH0','TROOH1','TROOI0','TROOI1','TROOJ0','TROOJ1',
+                 'TROOK0','TROOK1','TROOL0','TROOL1'] },
+    ];
+    for (let ei = 0; ei < 2; ei++) {
+        const set = ENEMY_SPRITE_SETS[ei];
+        for (const n of set.walk) {
+            const l = lumpsArr.find(x => x.name === n);
+            if (l && l.size > 8) { try { enemySprites[ei].push(parsePatchSprite(l.data, doomPalette)); } catch(e){} }
+            if (enemySprites[ei].length >= 4) break;
+        }
+        for (const n of set.attack) {
+            const l = lumpsArr.find(x => x.name === n);
+            if (l && l.size > 8) { try { enemyAttackSprites[ei] = parsePatchSprite(l.data, doomPalette); break; } catch(e){} }
+        }
+        for (const n of set.pain) {
+            const l = lumpsArr.find(x => x.name === n);
+            if (l && l.size > 8) { try { enemyPainSprites[ei] = parsePatchSprite(l.data, doomPalette); break; } catch(e){} }
+        }
+        for (const n of set.dead) {
+            const l = lumpsArr.find(x => x.name === n);
+            if (l && l.size > 8) { try { enemyDeadSprites[ei].push(parsePatchSprite(l.data, doomPalette)); } catch(e){} }
+            if (enemyDeadSprites[ei].length >= 5) break;
+        }
+    }
+    // Pre-cache all enemy sprite canvases
+    for (let ei = 0; ei < 2; ei++) {
+        for (let fi = 0; fi < enemySprites[ei].length; fi++) {
+            cacheSpriteCanvas(`walk${ei}_${fi}`, enemySprites[ei][fi]);
+        }
+        cacheSpriteCanvas(`attack${ei}`, enemyAttackSprites[ei]);
+        cacheSpriteCanvas(`pain${ei}`, enemyPainSprites[ei]);
+        for (let fi = 0; fi < enemyDeadSprites[ei].length; fi++) {
+            cacheSpriteCanvas(`dead${ei}_${fi}`, enemyDeadSprites[ei][fi]);
+        }
+    }
+    console.log(`Sprites loaded: ${shotgunFrames.length} weapon, walk: ${enemySprites[0].length}/${enemySprites[1].length}, attack: ${enemyAttackSprites[0]?'yes':'no'}/${enemyAttackSprites[1]?'yes':'no'}, pain: ${enemyPainSprites[0]?'yes':'no'}/${enemyPainSprites[1]?'yes':'no'}, dead: ${enemyDeadSprites[0].length}/${enemyDeadSprites[1].length}, HUD: ${hudBarSprite?'yes':'no'}`);
+}
+
+/* ============================================================
+ *  Sprite Rendering (canvas-based with depth clipping)
+ * ============================================================ */
+function getEnemySpriteIdx(enemyType) {
+    // Map enemy type to sprite set index
+    if (enemyType === 3004) return 0;  // Zombieman -> POSS
+    return 1;  // Shotgun Guy, Imp, Demon -> SPOS/TROO
+}
+
+function drawSpriteClipped(ctx, tc, sprite, drawX, drawY, drawW, drawH, dist, depthBuf, alpha) {
+    const colStart = Math.max(0, Math.floor(drawX));
+    const colEnd = Math.min(SCR_W, Math.ceil(drawX + drawW));
+    if (colStart >= colEnd) return;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    let stripStart = -1;
+    for (let col = colStart; col <= colEnd; col++) {
+        const vis = col < colEnd && dist < (depthBuf[col] || Infinity);
+        if (vis && stripStart < 0) stripStart = col;
+        if (!vis && stripStart >= 0) {
+            const sx = Math.max(0, (stripStart - drawX) / drawW * sprite.width);
+            const sw = Math.max(0.5, (col - stripStart) / drawW * sprite.width);
+            ctx.drawImage(tc, sx, 0, sw, sprite.height, stripStart, drawY, col - stripStart, drawH);
+            stripStart = -1;
+        }
+    }
+
+    ctx.restore();
+}
+
+function drawAllSprites(ctx) {
+    const sprites = [];
+
+    for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        if (e.hp > 0) {
+            sprites.push({ x: e.x, y: e.y, type: 'enemy', idx: i,
+                attacking: e.state === 3, inPain: e.state === 4 });
+        } else if (enemyDeathTimers[i] > 0) {
+            sprites.push({ x: e.x, y: e.y, type: 'dead', idx: i });
+        }
+    }
+
+    // Calculate distances and sort back-to-front
+    sprites.forEach(s => { s.dist = Math.sqrt((s.x - playerX)**2 + (s.y - playerY)**2); });
+    sprites.sort((a, b) => b.dist - a.dist);
+
+    for (const s of sprites) {
+        let ang = Math.atan2(s.y - playerY, s.x - playerX) - playerAngle;
+        while (ang > Math.PI) ang -= 2*Math.PI;
+        while (ang < -Math.PI) ang += 2*Math.PI;
+        if (Math.abs(ang) > FOV/2 + 0.2) continue;
+
+        // Get floor height at enemy position for proper grounding
+        const enemyFloorH = getSectorHeightAt(s.x, s.y);
+        const screenCenterX = (0.5 - ang / FOV) * SCR_W;
+        const perpDist = s.dist * Math.cos(ang);
+        if (perpDist < 10) continue;
+        const scale = (SCR_H / 2) / perpDist * 64;
+
+        // Screen height of sprite based on actual sprite height (56 units for humanoids)
+        const spriteWorldH = 56;
+        const sprScreenH = spriteWorldH * scale / 64;
+        const sprScreenW = sprScreenH * 0.6;
+
+        // Bottom of sprite at floor level
+        const botY = Math.floor(SCR_H / 2 - (enemyFloorH - playerZ) * scale / 64);
+        const topY = botY - sprScreenH;
+
+        // Quick visibility check
+        const sx0 = Math.floor(screenCenterX - sprScreenW/2);
+        const sx1 = Math.floor(screenCenterX + sprScreenW/2);
+        let vis = false;
+        for (let c = Math.max(0, sx0); c < Math.min(SCR_W, sx1); c++) {
+            if (perpDist < zBuffer[c]) { vis = true; break; }
+        }
+        if (!vis) continue;
+
+        if (s.type === 'enemy') {
+            drawWADSprite(ctx, screenCenterX, topY, sprScreenH, sprScreenW, perpDist, s.idx, s.attacking, s.inPain);
+        } else if (s.type === 'dead') {
+            drawWADSpriteDead(ctx, screenCenterX, topY, sprScreenH, sprScreenW, perpDist, s.idx);
+        }
+    }
+}
+
+function drawWADSprite(ctx, cx, cy, sh, sw, dist, enemyIdx, attacking, inPain) {
+    const sprIdx = getEnemySpriteIdx(enemies[enemyIdx].type);
+    let cached;
+    if (inPain) cached = enemySpriteCanvases[`pain${sprIdx}`];
+    if (!cached && attacking) cached = enemySpriteCanvases[`attack${sprIdx}`];
+    if (!cached) {
+        const walkFrames = enemySprites[sprIdx] ? enemySprites[sprIdx].length : 0;
+        if (walkFrames > 0) {
+            const fi = Math.floor(renderFrame / 10) % walkFrames;
+            cached = enemySpriteCanvases[`walk${sprIdx}_${fi}`];
+        }
+    }
+    if (!cached) {
+        // Fallback colored rectangle
+        const shade = Math.max(0.25, 1 - dist / 1500);
+        ctx.fillStyle = `rgba(${Math.floor(60*shade)},${Math.floor(100*shade)},${Math.floor(60*shade)},0.9)`;
+        ctx.fillRect(cx-sw*0.3, cy+sh*0.15, sw*0.6, sh*0.7);
+        return;
+    }
+    const { canvas: tc, sprite } = cached;
+    const aspect = sprite.width / sprite.height;
+    const drawH = sh * 0.85;
+    const drawW = drawH * aspect;
+    const drawX = cx - drawW / 2;
+    const drawY = cy + sh - drawH;
+    const shade = Math.max(0.2, Math.min(1.0, 1.4 - dist / 1500));
+    drawSpriteClipped(ctx, tc, sprite, drawX, drawY, drawW, drawH, dist, zBuffer, shade);
+}
+
+function drawWADSpriteDead(ctx, cx, cy, sh, sw, dist, enemyIdx) {
+    const sprIdx = getEnemySpriteIdx(enemies[enemyIdx].type);
+    const numFrames = enemyDeadSprites[sprIdx] ? enemyDeadSprites[sprIdx].length : 0;
+    if (numFrames === 0) {
+        const shade = Math.max(0.3, 1 - dist / 1500);
+        ctx.fillStyle = `rgba(${Math.floor(80*shade)},${Math.floor(20*shade)},${Math.floor(20*shade)},0.6)`;
+        ctx.fillRect(cx-sw*0.3, cy+sh*0.78, sw*0.6, sh*0.06);
+        return;
+    }
+    const timer = enemyDeathTimers[enemyIdx];
+    const progress = 1 - timer / DEATH_RENDER_FRAMES;
+    const fi = Math.min(numFrames - 1, Math.floor(progress * numFrames));
+    const cached = enemySpriteCanvases[`dead${sprIdx}_${fi}`];
+    if (!cached) return;
+    const { canvas: tc, sprite } = cached;
+    const maxW = sh * 0.85 * 0.6;
+    const aspect = sprite.width / sprite.height;
+    let drawW = maxW;
+    let drawH = drawW / aspect;
+    if (drawH > sh * 0.85) { drawH = sh * 0.85; drawW = drawH * aspect; }
+    const drawX = cx - drawW / 2;
+    const drawY = cy + sh - drawH;
+    const shade = Math.max(0.2, Math.min(1.0, 1.4 - dist / 1500));
+    drawSpriteClipped(ctx, tc, sprite, drawX, drawY, drawW, drawH, dist, zBuffer, shade);
+}
+
+/* ============================================================
+ *  Weapon Rendering
+ * ============================================================ */
+function drawShotgun(ctx) {
+    const isShooting = shootTimer > 0;
+    if (shotgunFrames.length === 0) { drawFallbackWeapon(ctx, isShooting); return; }
+
+    let frameIdx = 0;
+    if (isShooting) {
+        const elapsed = SHOOT_RENDER_FRAMES - shootTimer;
+        if (elapsed < 6) frameIdx = Math.min(1, shotgunFrames.length - 1);
+        else if (elapsed < 14) frameIdx = Math.min(2, shotgunFrames.length - 1);
+        else frameIdx = Math.min(3, shotgunFrames.length - 1);
+    }
+
+    const frame = shotgunFrames[frameIdx];
+    const tc = shotgunCanvases[frameIdx];
+    if (!frame || !tc) { drawFallbackWeapon(ctx, isShooting); return; }
+
+    const bob = Math.sin(renderFrame * 0.08) * 1;
+    const kick = (isShooting && shootTimer > SHOOT_RENDER_FRAMES - 6) ? -3 : 0;
+    const dx = (SCR_W / 2) - (frame.width / 2);
+    const dy = SCR_H - frame.height + bob + kick;
+    ctx.drawImage(tc, dx, dy, frame.width, frame.height);
+
+    // Muzzle flash
+    if (isShooting && shootTimer > SHOOT_RENDER_FRAMES - 4) {
+        const flashX = SCR_W / 2;
+        const flashY = dy + 10;
+        const grad = ctx.createRadialGradient(flashX, flashY, 0, flashX, flashY, 20);
+        grad.addColorStop(0, 'rgba(255,240,150,0.8)');
+        grad.addColorStop(0.3, 'rgba(255,180,50,0.5)');
+        grad.addColorStop(1, 'rgba(255,100,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(flashX - 25, flashY - 20, 50, 30);
+    }
+}
+
+function drawFallbackWeapon(ctx, isShooting) {
+    const bob = Math.sin(renderFrame * 0.06) * 1;
+    const baseX = SCR_W / 2, baseY = SCR_H * 0.72 + bob + (isShooting ? -6 : 0);
+    ctx.save();
+    if (isShooting) {
+        const fg = ctx.createRadialGradient(baseX, baseY-15, 1, baseX, baseY-15, 18);
+        fg.addColorStop(0, 'rgba(255,240,150,0.9)'); fg.addColorStop(1, 'rgba(255,100,0,0)');
+        ctx.fillStyle = fg; ctx.fillRect(baseX-20, baseY-32, 40, 25);
+    }
+    ctx.fillStyle = '#3a3a3a'; ctx.fillRect(baseX-3, baseY-20, 6, 25);
+    ctx.fillStyle = '#2a2a2a';
+    ctx.beginPath();
+    ctx.moveTo(baseX-13, baseY+5); ctx.lineTo(baseX+13, baseY+5);
+    ctx.lineTo(baseX+11, baseY+18); ctx.lineTo(baseX+5, baseY+30);
+    ctx.lineTo(baseX-5, baseY+30); ctx.lineTo(baseX-11, baseY+18);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+}
+
+function getSectorHeightAt(x, y) {
+    let nodeIdx = level.nodes.length - 1;
+    while (!(nodeIdx & 0x8000)) {
+        if (nodeIdx >= level.nodes.length) break;
+        const node = level.nodes[nodeIdx];
+        const side = pointOnSide(x, y, node);
+        nodeIdx = side === 0 ? node.rightChild : node.leftChild;
+    }
+    const ssIdx = nodeIdx & 0x7FFF;
+    if (ssIdx < level.subsectors.length) {
+        const ss = level.subsectors[ssIdx];
+        // Try all segs in the subsector to find a valid sector
+        for (let i = 0; i < ss.numSegs; i++) {
+            const segIdx = ss.firstSeg + i;
+            if (segIdx >= level.segs.length) continue;
+            const seg = level.segs[segIdx];
+            const ld = level.linedefs[seg.linedef];
+            if (!ld) continue;
+            // The subsector is on the front side when direction=0, back side when direction=1
+            const sideIdx = seg.direction === 0 ? ld.frontSide : ld.backSide;
+            if (sideIdx >= 0 && sideIdx < level.sidedefs.length) {
+                const sector = level.sectors[level.sidedefs[sideIdx].sector];
+                if (sector) return sector.floorHeight;
+            }
+            // Fallback: try the other side of the linedef
+            const altSideIdx = seg.direction === 0 ? ld.backSide : ld.frontSide;
+            if (altSideIdx >= 0 && altSideIdx < level.sidedefs.length) {
+                const sector = level.sectors[level.sidedefs[altSideIdx].sector];
+                if (sector) return sector.floorHeight;
+            }
+        }
+    }
+    return 0;
+}
+
+/* ============================================================
+ *  Collision Detection
+ * ============================================================ */
+function tryMove(ox, oy, nx, ny) {
+    for (const ld of level.linedefs) {
+        const v1 = level.vertices[ld.v1], v2 = level.vertices[ld.v2];
+        if (!v1 || !v2) continue;
+
+        // Check line segment intersection
+        const ldx = v2.x - v1.x, ldy = v2.y - v1.y;
+        const moveDx = nx - ox, moveDy = ny - oy;
+
+        const denom = moveDx * ldy - moveDy * ldx;
+        if (Math.abs(denom) < 0.001) continue;
+
+        const t = ((v1.x - ox) * ldy - (v1.y - oy) * ldx) / denom;
+        const u = ((v1.x - ox) * moveDy - (v1.y - oy) * moveDx) / denom;
+
+        if (t > 0 && t < 1 && u >= 0 && u <= 1) {
+            // One-sided linedef: always blocks
+            if (ld.backSide < 0 || ld.frontSide < 0) {
+                return { x: ox, y: oy };
+            }
+            // Two-sided: check if opening is passable
+            const fSector = level.sectors[level.sidedefs[ld.frontSide].sector];
+            const bSector = level.sectors[level.sidedefs[ld.backSide].sector];
+            const stepH = Math.max(fSector.floorHeight, bSector.floorHeight);
+            const ceilH = Math.min(fSector.ceilHeight, bSector.ceilHeight);
+            if (stepH - playerZ + PLAYER_HEIGHT <= 24 && ceilH - stepH >= 56) continue;
+            return { x: ox, y: oy };
+        }
+    }
+    return { x: nx, y: ny };
+}
+
+function getPlayerSectorHeight() {
+    return getSectorHeightAt(playerX, playerY);
+}
+
+/* ============================================================
+ *  Doors
+ * ============================================================ */
+// DOOM door linedef specials (manual use)
+const DOOR_SPECIALS_USE = new Set([1, 26, 27, 28, 31, 32, 33, 34, 117, 118]);
+// Walk-trigger door specials
+const DOOR_SPECIALS_WALK = new Set([2, 3, 4, 16, 36, 46, 86, 90]);
+const DOOR_SPEED = 2;       // units per tick
+const DOOR_WAIT = 150;      // ticks to stay open before closing
+const DOOR_USE_RANGE = 80;  // max distance to use a door
+
+// Active door animations: Map<sectorIdx, {targetCeil, origCeil, state, timer}>
+const activeDoors = new Map();
+
+function isDoorSector(sectorIdx) {
+    // A door sector typically has ceiling == floor when closed
+    const s = level.sectors[sectorIdx];
+    return s && s.ceilHeight <= s.floorHeight + 4;
+}
+
+function getDoorTargetCeil(sectorIdx) {
+    // Find the lowest adjacent ceiling to determine how high the door opens
+    let target = -Infinity;
+    for (const ld of level.linedefs) {
+        if (ld.frontSide < 0 || ld.backSide < 0) continue;
+        const fSec = level.sidedefs[ld.frontSide].sector;
+        const bSec = level.sidedefs[ld.backSide].sector;
+        if (fSec === sectorIdx) {
+            const adj = level.sectors[bSec];
+            if (adj) target = Math.max(target, adj.ceilHeight);
+        } else if (bSec === sectorIdx) {
+            const adj = level.sectors[fSec];
+            if (adj) target = Math.max(target, adj.ceilHeight);
+        }
+    }
+    return target === -Infinity ? level.sectors[sectorIdx].floorHeight + 128 : target;
+}
+
+function tryUseDoor() {
+    // Cast a short ray forward to find a door linedef
+    const cos = Math.cos(playerAngle), sin = Math.sin(playerAngle);
+    const rayEndX = playerX + cos * DOOR_USE_RANGE;
+    const rayEndY = playerY + sin * DOOR_USE_RANGE;
+    const rdx = rayEndX - playerX, rdy = rayEndY - playerY;
+
+    for (const ld of level.linedefs) {
+        // Check use-activated door specials
+        if (!DOOR_SPECIALS_USE.has(ld.special)) continue;
+        if (ld.frontSide < 0 || ld.backSide < 0) continue;
+
+        const v1 = level.vertices[ld.v1], v2 = level.vertices[ld.v2];
+        if (!v1 || !v2) continue;
+
+        // Ray-line intersection
+        const ldx = v2.x - v1.x, ldy = v2.y - v1.y;
+        const denom = rdx * ldy - rdy * ldx;
+        if (Math.abs(denom) < 0.001) continue;
+        const t = ((v1.x - playerX) * ldy - (v1.y - playerY) * ldx) / denom;
+        const u = ((v1.x - playerX) * rdy - (v1.y - playerY) * rdx) / denom;
+        if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+
+        // Find the door sector (the one with ceil == floor)
+        const fSecIdx = level.sidedefs[ld.frontSide].sector;
+        const bSecIdx = level.sidedefs[ld.backSide].sector;
+        let doorSecIdx = -1;
+        if (isDoorSector(fSecIdx)) doorSecIdx = fSecIdx;
+        else if (isDoorSector(bSecIdx)) doorSecIdx = bSecIdx;
+        // If neither is a door sector, use the back sector as default
+        if (doorSecIdx < 0) doorSecIdx = bSecIdx;
+
+        openDoor(doorSecIdx, ld.special);
+        return;
+    }
+}
+
+function openDoor(sectorIdx, special) {
+    if (activeDoors.has(sectorIdx)) {
+        const door = activeDoors.get(sectorIdx);
+        // If closing, reverse it
+        if (door.state === 'closing') {
+            door.state = 'opening';
+        }
+        return;
+    }
+
+    const sector = level.sectors[sectorIdx];
+    const origCeil = sector.ceilHeight;
+    const targetCeil = getDoorTargetCeil(sectorIdx) - 4; // 4 units below adjacent ceiling
+    const staysOpen = (special === 31 || special === 32 || special === 33 || special === 34 || special === 2 || special === 46);
+
+    activeDoors.set(sectorIdx, {
+        targetCeil,
+        origCeil,
+        state: 'opening',
+        timer: 0,
+        staysOpen,
+    });
+}
+
+function updateDoors() {
+    for (const [secIdx, door] of activeDoors) {
+        const sector = level.sectors[secIdx];
+
+        if (door.state === 'opening') {
+            sector.ceilHeight += DOOR_SPEED;
+            if (sector.ceilHeight >= door.targetCeil) {
+                sector.ceilHeight = door.targetCeil;
+                if (door.staysOpen) {
+                    activeDoors.delete(secIdx);
+                } else {
+                    door.state = 'waiting';
+                    door.timer = DOOR_WAIT;
+                }
+            }
+        } else if (door.state === 'waiting') {
+            door.timer--;
+            if (door.timer <= 0) {
+                door.state = 'closing';
+            }
+        } else if (door.state === 'closing') {
+            sector.ceilHeight -= DOOR_SPEED;
+            if (sector.ceilHeight <= door.origCeil) {
+                sector.ceilHeight = door.origCeil;
+                activeDoors.delete(secIdx);
+            }
+        }
+    }
+}
+
+function checkWalkTriggers() {
+    // Check if player crossed any walk-trigger linedefs
+    for (const ld of level.linedefs) {
+        if (!DOOR_SPECIALS_WALK.has(ld.special)) continue;
+        if (ld.frontSide < 0) continue;
+
+        const v1 = level.vertices[ld.v1], v2 = level.vertices[ld.v2];
+        if (!v1 || !v2) continue;
+
+        // Simple proximity check
+        const ldx = v2.x - v1.x, ldy = v2.y - v1.y;
+        const len2 = ldx*ldx + ldy*ldy;
+        if (len2 < 1) continue;
+        const t = Math.max(0, Math.min(1, ((playerX - v1.x)*ldx + (playerY - v1.y)*ldy) / len2));
+        const cx = v1.x + t * ldx, cy = v1.y + t * ldy;
+        const dist2 = (playerX - cx)**2 + (playerY - cy)**2;
+        if (dist2 > PLAYER_RADIUS * PLAYER_RADIUS) continue;
+
+        // Find tagged sector(s) to open
+        if (ld.tag > 0) {
+            for (let si = 0; si < level.sectors.length; si++) {
+                if (level.sectors[si].tag === ld.tag) {
+                    openDoor(si, ld.special);
+                }
+            }
+        } else if (ld.backSide >= 0) {
+            const bSecIdx = level.sidedefs[ld.backSide].sector;
+            openDoor(bSecIdx, ld.special);
+        }
+
+        // For W1 (once) triggers, disable after firing
+        if ([2, 3, 4, 16, 46].includes(ld.special)) {
+            ld.special = 0;
+        }
+    }
+}
+
+/* ============================================================
+ *  Minimap
+ * ============================================================ */
+const mmCanvas = document.getElementById('minimap');
+const mmCtx = mmCanvas.getContext('2d');
+
+function renderMinimap() {
+    mmCtx.fillStyle = '#1a1a2e';
+    mmCtx.fillRect(0, 0, 200, 200);
+
+    if (!level) return;
+
+    // Find map bounds
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const v of level.vertices) {
+        minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
+        minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+    }
+    const rangeX = maxX - minX || 1, rangeY = maxY - minY || 1;
+    const scale = 180 / Math.max(rangeX, rangeY);
+    const ox = 10, oy = 10;
+
+    const mapToScreen = (x, y) => ({
+        sx: ox + (x - minX) * scale,
+        sy: oy + (maxY - y) * scale,
+    });
+
+    // Draw linedefs
+    mmCtx.lineWidth = 0.5;
+    for (const ld of level.linedefs) {
+        const v1 = level.vertices[ld.v1], v2 = level.vertices[ld.v2];
+        if (!v1 || !v2) continue;
+        const p1 = mapToScreen(v1.x, v1.y), p2 = mapToScreen(v2.x, v2.y);
+        mmCtx.strokeStyle = ld.backSide >= 0 ? '#3a3a4a' : '#6a6a7a';
+        mmCtx.beginPath();
+        mmCtx.moveTo(p1.sx, p1.sy);
+        mmCtx.lineTo(p2.sx, p2.sy);
+        mmCtx.stroke();
+    }
+
+    // Draw enemies
+    for (const e of enemies) {
+        if (e.hp <= 0) continue;
+        const p = mapToScreen(e.x, e.y);
+        mmCtx.fillStyle = '#ef4444';
+        mmCtx.beginPath();
+        mmCtx.arc(p.sx, p.sy, 2, 0, Math.PI * 2);
+        mmCtx.fill();
+    }
+
+    // Draw player
+    const pp = mapToScreen(playerX, playerY);
+    mmCtx.fillStyle = '#3b82f6';
+    mmCtx.beginPath();
+    mmCtx.arc(pp.sx, pp.sy, 3, 0, Math.PI * 2);
+    mmCtx.fill();
+    mmCtx.strokeStyle = 'rgba(59,130,246,0.5)';
+    mmCtx.lineWidth = 1;
+    mmCtx.beginPath();
+    mmCtx.moveTo(pp.sx, pp.sy);
+    mmCtx.lineTo(pp.sx + Math.cos(-playerAngle) * 10, pp.sy + Math.sin(-playerAngle) * 10);
+    mmCtx.stroke();
+}
+
+/* ============================================================
+ *  HUD
+ * ============================================================ */
+const hudCanvas = document.getElementById('hudCanvas');
+const hudCtx = hudCanvas.getContext('2d');
+
+function renderHUD() {
+    hudCtx.fillStyle = '#4b4b4b';
+    hudCtx.fillRect(0, 0, 320, 32);
+
+    // Draw STBAR background if available
+    if (hudBarSprite) {
+        const id = hudCtx.createImageData(hudBarSprite.width, hudBarSprite.height);
+        const d32 = new Uint32Array(id.data.buffer);
+        for (let i = 0; i < hudBarSprite.pixels.length; i++) {
+            d32[i] = hudBarSprite.pixels[i] || d32[i];
+        }
+        hudCtx.putImageData(id, 0, 0, 0, 0, 320, 32);
+    }
+
+    // Draw numbers using STTNUM sprites
+    drawHUDNumber(gameState.ammo, -10, 1);
+    drawHUDNumber(gameState.hp, 50, 1);
+
+    // Draw face
+    if (hudFaces.length > 0) {
+        const faceIdx = gameState.hp <= 20 ? 3 : (gameState.hp <= 40 ? 2 : (isFaceOuch ? 5 : (tickNum % 30 < 10 ? 0 : tickNum % 30 < 20 ? 1 : 2)));
+        const face = hudFaces[Math.min(faceIdx, hudFaces.length - 1)];
+        if (face) {
+            const tc = document.createElement('canvas');
+            tc.width = face.width; tc.height = face.height;
+            const tctx = tc.getContext('2d');
+            const fid = tctx.createImageData(face.width, face.height);
+            const fd32 = new Uint32Array(fid.data.buffer);
+            for (let i = 0; i < face.pixels.length; i++) fd32[i] = face.pixels[i];
+            tctx.putImageData(fid, 0, 0);
+            hudCtx.drawImage(tc, 143, 0, 34, 32);
+        }
+    }
+
+    drawHUDNumber(gameState.armor, 221, 1);
+
+    // Tick info
+    hudCtx.fillStyle = '#808080';
+    hudCtx.font = '6px monospace';
+    hudCtx.fillText(`TICK ${tickNum}`, 280, 28);
+}
+
+function drawHUDNumber(value, x, y) {
+    y = y + 2;
+    const str = String(Math.max(0, Math.min(999, Math.abs(value))));
+    const digits = str.padStart(3, ' ').split('');
+    let dx = x;
+    for (const ch of digits) {
+        if (ch === ' ') { dx += 14; continue; }
+        const digit = parseInt(ch);
+        const sprite = hudNumbers[digit];
+        if (sprite) {
+            drawHUDSprite(sprite, dx, y);
+            dx += sprite.width;
+        } else {
+            hudCtx.fillStyle = '#c00';
+            hudCtx.font = 'bold 14px monospace';
+            hudCtx.fillText(ch, dx + 2, y + 14);
+            dx += 14;
+        }
+    }
+}
+
+function drawHUDSprite(sprite, x, y) {
+    const tc = document.createElement('canvas');
+    tc.width = sprite.width; tc.height = sprite.height;
+    const tctx = tc.getContext('2d');
+    const id = tctx.createImageData(sprite.width, sprite.height);
+    const d32 = new Uint32Array(id.data.buffer);
+    for (let i = 0; i < sprite.pixels.length; i++) d32[i] = sprite.pixels[i];
+    tctx.putImageData(id, 0, 0);
+    hudCtx.drawImage(tc, x, y);
+}
+
+/* ============================================================
+ *  Enemy Management
+ * ============================================================ */
+const enemies = [];
+// DOOM thing types for enemies
+const ENEMY_TYPES = {
+    3004: { name: 'Zombieman', hp: 20, radius: 20, height: 56, speed: 3, sprite: 'POSS', damage: 5 },
+    9: { name: 'Shotgun Guy', hp: 30, radius: 20, height: 56, speed: 3, sprite: 'SPOS', damage: 10 },
+    3001: { name: 'Imp', hp: 60, radius: 20, height: 56, speed: 4, sprite: 'TROO', damage: 8 },
+    3002: { name: 'Demon', hp: 150, radius: 30, height: 56, speed: 6, sprite: 'SARG', damage: 15 },
+};
+
+function initEnemies() {
+    enemies.length = 0;
+    enemyDeathTimers = [];
+    if (!level) return;
+
+    for (const thing of level.things) {
+        const etype = ENEMY_TYPES[thing.type];
+        if (!etype) continue;
+        // Only spawn on skill 3+ (flags bit 2)
+        if (!(thing.flags & 4) && !(thing.flags & 2)) continue;
+        if (enemies.length >= MAX_ENEMIES) break;
+        enemies.push({
+            x: thing.x, y: thing.y,
+            angle: thing.angle * Math.PI / 180,
+            type: thing.type,
+            hp: etype.hp,
+            maxHp: etype.hp,
+            state: 0,  // 0=idle, 1=alert, 2=chase, 3=attack, 4=pain, 5=dead
+            attackCooldown: 0,
+            painTimer: 0,
+            sprite: etype.sprite,
+            speed: etype.speed,
+            damage: etype.damage,
+            radius: etype.radius,
+        });
+        enemyDeathTimers.push(0);
+    }
+    document.getElementById('enemyInfo').textContent = enemies.length;
+}
+
+/* ============================================================
+ *  Game State (for ISA interpreter)
+ * ============================================================ */
+let gameState = {
+    hp: 100, armor: 0, ammo: 50,
+    kills: 0, shooting: 0, tick: 0,
+    damageThisTick: 0,
+};
+let totalSteps = 0;
+let tickNum = 0;
+
+/* ============================================================
+ *  ISA Interpreter - Game Logic
+ * ============================================================ */
+let isaInterpreter = null;
+let compileResult = null;
+
+// C source for the game logic that runs on the ISA interpreter
+const GAME_LOGIC_SOURCE = `
+// DOOM E1M1 game logic — runs on ISA interpreter or ONNX backend
+// States: 0=idle, 1=alert, 2=chase, 3=attack, 4=pain, 5=dead
+
+// Player state
+int hp;
+int armor;
+int ammo;
+int kills;
+int shooting;
+int tick;
+int damage_in;
+int player_shot; // did player fire this tick (for sound alert)
+
+// Enemy state arrays (up to 16 enemies)
+int e_state[16];
+int e_hp[16];
+int e_dist[16];     // distance to player, scaled (units/16)
+int e_los[16];      // line of sight to player
+int e_atk_cd[16];   // attack cooldown
+int e_pain[16];     // pain timer
+int e_do_chase[16]; // output: should move toward player
+int e_do_atk[16];   // output: should deal damage
+int e_type[16];     // 0=zombieman, 1=shotgun, 2=imp, 3=demon
+int e_alert[16];    // alert level (sound propagation)
+
+// Output
+int damage_out;
+int cmd;
+
+// Scratch
+int i;
+int st;
+int d;
+int dmg;
+int atk_range;
+int alert_dist;
+int alert_all;
+
+void main() {
+    damage_out = 0;
+    dmg = damage_in;
+    damage_in = 0;
+    tick = tick + 1;
+
+    // Apply damage to player
+    if (dmg > 0) {
+        if (armor > 0) {
+            int blocked;
+            blocked = dmg >> 1;
+            if (blocked > armor) {
+                blocked = armor;
+            }
+            armor = armor - blocked;
+            dmg = dmg - blocked;
+        }
+        hp = hp - dmg;
+        if (hp < 0) {
+            hp = 0;
+        }
+    }
+
+    // Process shooting — decrement ammo
+    if (shooting > 0) {
+        if (ammo > 0) {
+            ammo = ammo - 1;
+        }
+        player_shot = 1;
+        shooting = 0;
+    }
+
+    // Sound alert: if player shot, wake up all enemies within alert range
+    alert_all = 0;
+    if (player_shot > 0) {
+        alert_all = 1;
+        player_shot = 0;
+    }
+
+    // Process each enemy
+    i = 0;
+    while (i < 16) {
+        st = e_state[i];
+        e_do_chase[i] = 0;
+        e_do_atk[i] = 0;
+
+        // Skip dead enemies
+        if (st == 5) {
+            i = i + 1;
+            // need to continue but no continue keyword
+            st = 99;
+        }
+
+        // Decrement cooldowns
+        if (e_atk_cd[i] > 0) {
+            e_atk_cd[i] = e_atk_cd[i] - 1;
+        }
+        if (e_pain[i] > 0) {
+            e_pain[i] = e_pain[i] - 1;
+            if (e_pain[i] == 0) {
+                if (e_hp[i] > 0) {
+                    e_state[i] = 2; // resume chasing after pain
+                    st = 2;
+                }
+            }
+        }
+
+        // Sound alert: wake idle enemies
+        if (st == 0) {
+            if (alert_all > 0) {
+                if (e_dist[i] < 80) {
+                    e_state[i] = 1;
+                    st = 1;
+                    e_alert[i] = 20;
+                }
+            }
+            // LOS activation: see player nearby
+            if (e_los[i] > 0) {
+                if (e_dist[i] < 60) {
+                    e_state[i] = 2;
+                    st = 2;
+                }
+            }
+        }
+
+        // Alert: just woken up, transition to chase
+        if (st == 1) {
+            if (e_alert[i] > 0) {
+                e_alert[i] = e_alert[i] - 1;
+            }
+            if (e_los[i] > 0) {
+                e_state[i] = 2;
+                st = 2;
+            }
+            if (e_alert[i] == 0) {
+                // Lost interest
+                if (e_los[i] == 0) {
+                    e_state[i] = 0;
+                    st = 0;
+                }
+            }
+            e_do_chase[i] = 1;
+        }
+
+        // Chase: move toward player, attack when in range
+        if (st == 2) {
+            d = e_dist[i];
+
+            // Attack range depends on enemy type
+            atk_range = 25;
+            if (e_type[i] == 3) {
+                atk_range = 5; // demon is melee only
+            }
+
+            if (d < atk_range) {
+                if (e_los[i] > 0) {
+                    if (e_atk_cd[i] == 0) {
+                        // Stop and enter attack — don't chase this tick
+                        e_state[i] = 3;
+                        st = 3;
+                        e_atk_cd[i] = 8; // wind-up ticks before firing
+                    }
+                }
+            }
+
+            // Only chase if we didn't transition to attack
+            if (st == 2) {
+                e_do_chase[i] = 1;
+            }
+        }
+
+        // Attack: wind up, fire, then stay for animation
+        if (st == 3) {
+            // Enemy stands still during attack (no chase)
+            if (e_atk_cd[i] > 0) {
+                // Wind-up / animation hold — face player but don't move
+                if (e_atk_cd[i] == 4) {
+                    // Fire at the midpoint of the animation
+                    e_do_atk[i] = 1;
+                    damage_out = damage_out + 1;
+                }
+            }
+            if (e_atk_cd[i] == 0) {
+                // Attack animation finished, set cooldown and return to chase
+                if (e_type[i] == 3) {
+                    e_atk_cd[i] = 10;
+                } else {
+                    if (e_type[i] == 1) {
+                        e_atk_cd[i] = 35;
+                    } else {
+                        e_atk_cd[i] = 20;
+                    }
+                }
+                e_state[i] = 2;
+            }
+        }
+
+        // Pain state: handled by pain timer above
+
+        i = i + 1;
+    }
+}
+`;
+
+let onnxLoaded = false;
+let stateTensor = null;
+let useV4 = false;
+
+function initISA() {
+    compileResult = compileC(GAME_LOGIC_SOURCE, 32, 224, 2048, 8);
+    isaInterpreter = createInterpreter(compileResult);
+    console.log(`Compiled game logic: ${compileResult.commands.length} instructions`);
+
+    // Initialize player state
+    const v = compileResult.meta.variables;
+    isaInterpreter.writeVar(v.hp, 100);
+    isaInterpreter.writeVar(v.armor, 0);
+    isaInterpreter.writeVar(v.ammo, 50);
+    isaInterpreter.writeVar(v.kills, 0);
+
+    // Build state tensor for V4 mode
+    stateTensor = buildStateTensor(compileResult);
+}
+
+function getEnemyTypeIdx(thingType) {
+    // Map DOOM thing type to our 0-3 enemy type index
+    if (thingType === 3004) return 0; // Zombieman
+    if (thingType === 9) return 1;    // Shotgun Guy
+    if (thingType === 3001) return 2; // Imp
+    if (thingType === 3002) return 3; // Demon
+    return 0;
+}
+
+async function runGameTick() {
+    if (!isaInterpreter || !compileResult) return;
+    const v = compileResult.meta.variables;
+
+    // Write sensor data for enemies
+    for (let i = 0; i < MAX_ENEMIES; i++) {
+        if (i < enemies.length && enemies[i].hp > 0) {
+            const e = enemies[i];
+            const dx = e.x - playerX, dy = e.y - playerY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const scaledDist = Math.min(127, Math.floor(dist / 16));
+
+            isaInterpreter.writeVar(v.e_state + i, e.state);
+            isaInterpreter.writeVar(v.e_hp + i, Math.min(127, e.hp));
+            isaInterpreter.writeVar(v.e_dist + i, scaledDist);
+            isaInterpreter.writeVar(v.e_los + i, hasLineOfSight(playerX, playerY, e.x, e.y) ? 1 : 0);
+            isaInterpreter.writeVar(v.e_atk_cd + i, e.attackCooldown);
+            isaInterpreter.writeVar(v.e_pain + i, e.painTimer);
+            isaInterpreter.writeVar(v.e_type + i, getEnemyTypeIdx(e.type));
+        } else {
+            isaInterpreter.writeVar(v.e_state + i, 5); // dead
+            isaInterpreter.writeVar(v.e_hp + i, 0);
+            isaInterpreter.writeVar(v.e_dist + i, 127);
+            isaInterpreter.writeVar(v.e_los + i, 0);
+        }
+    }
+
+    // Write game state
+    isaInterpreter.writeVar(v.shooting, gameState.shooting);
+    gameState.shooting = 0;
+
+    // Run game logic on chosen engine
+    if (useV4 && onnxLoaded) {
+        // ONNX transformer: sync ISA → state, run forward passes, sync back
+        isaInterpreter.syncToState(stateTensor, compileResult.config);
+        _currentState = stateTensor;
+        _currentConfig = compileResult.config;
+        const result = await runUntilStopFast(stateTensor, compileResult.config, 10000);
+        stateTensor = result.state;
+        _currentState = stateTensor;
+        isaInterpreter.syncFromState(stateTensor, compileResult.config);
+        totalSteps += result.steps;
+    } else {
+        isaInterpreter.resetPC();
+        const result = isaInterpreter.run(10000);
+        totalSteps += result.steps;
+    }
+    tickNum++;
+
+    // Read back results
+    const prevHp = gameState.hp;
+    gameState.hp = isaInterpreter.readVar(v.hp);
+    gameState.armor = isaInterpreter.readVar(v.armor);
+    gameState.ammo = isaInterpreter.readVar(v.ammo);
+    gameState.kills = isaInterpreter.readVar(v.kills);
+    gameState.tick = isaInterpreter.readVar(v.tick);
+
+    // Ouch face when player takes damage
+    if (gameState.hp < prevHp) {
+        isFaceOuch = true;
+        setTimeout(() => { isFaceOuch = false; }, 500);
+    }
+
+    const damageOut = isaInterpreter.readVar(v.damage_out);
+
+    // Process enemy decisions from ISA results
+    for (let i = 0; i < Math.min(enemies.length, MAX_ENEMIES); i++) {
+        const e = enemies[i];
+        if (e.hp <= 0) continue;
+
+        e.state = isaInterpreter.readVar(v.e_state + i);
+        e.attackCooldown = isaInterpreter.readVar(v.e_atk_cd + i);
+        e.painTimer = isaInterpreter.readVar(v.e_pain + i);
+
+        const doChase = isaInterpreter.readVar(v.e_do_chase + i);
+        const doAttack = isaInterpreter.readVar(v.e_do_atk + i);
+
+        // Move enemy toward player with pathfinding
+        if (doChase) {
+            moveEnemyTowardPlayer(e);
+        }
+
+        // Apply attack damage to player
+        if (doAttack) {
+            const dx = playerX - e.x, dy = playerY - e.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const etype = ENEMY_TYPES[e.type];
+            // Melee range for demons, ranged for others
+            const maxRange = (getEnemyTypeIdx(e.type) === 3) ? 100 : 500;
+            if (dist < maxRange) {
+                // Ranged damage falls off with distance
+                let dmgMul = 1.0;
+                if (getEnemyTypeIdx(e.type) !== 3 && dist > 200) {
+                    dmgMul = Math.max(0.3, 1.0 - (dist - 200) / 400);
+                }
+                const finalDmg = Math.max(1, Math.floor(etype.damage * dmgMul));
+                isaInterpreter.writeVar(v.damage_in,
+                    isaInterpreter.readVar(v.damage_in) + finalDmg);
+            }
+        }
+    }
+
+    document.getElementById('tickInfo').textContent = tickNum;
+    document.getElementById('stepsInfo').textContent = totalSteps;
+
+    // Update state tensor heatmap (every 5 ticks to avoid perf hit)
+    if (tickNum % 5 === 0) {
+        isaInterpreter.syncToState(stateTensor, compileResult.config);
+        renderHeatmap(null, stateTensor, compileResult.config);
+        updateStat('statSteps', totalSteps);
+        updateStat('statTotal', totalSteps);
+        updateStat('statBackend', useV4 ? 'ONNX' : 'ISA');
+    }
+}
+
+/* ============================================================
+ *  Enemy Pathfinding
+ * ============================================================ */
+function moveEnemyTowardPlayer(e) {
+    const dx = playerX - e.x, dy = playerY - e.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist <= e.radius + PLAYER_RADIUS) return;
+
+    const speed = e.speed;
+    const dirX = dx / dist, dirY = dy / dist;
+
+    // Try direct path first
+    let moveX = dirX * speed, moveY = dirY * speed;
+    let newPos = tryMoveEnemy(e, e.x + moveX, e.y + moveY);
+
+    if (newPos.blocked) {
+        // Try sliding along X axis
+        newPos = tryMoveEnemy(e, e.x + moveX, e.y);
+        if (newPos.blocked) {
+            // Try sliding along Y axis
+            newPos = tryMoveEnemy(e, e.x, e.y + moveY);
+            if (newPos.blocked) {
+                // Try perpendicular directions
+                const perpX = -dirY * speed, perpY = dirX * speed;
+                newPos = tryMoveEnemy(e, e.x + perpX, e.y + perpY);
+                if (newPos.blocked) {
+                    newPos = tryMoveEnemy(e, e.x - perpX, e.y - perpY);
+                }
+            }
+        }
+    }
+
+    if (!newPos.blocked) {
+        e.x = newPos.x;
+        e.y = newPos.y;
+        e.angle = Math.atan2(dy, dx);
+    }
+}
+
+function tryMoveEnemy(enemy, nx, ny) {
+    for (const ld of level.linedefs) {
+        const v1 = level.vertices[ld.v1], v2 = level.vertices[ld.v2];
+        if (!v1 || !v2) continue;
+
+        // Check if new position is too close to this line segment
+        const ldx = v2.x - v1.x, ldy = v2.y - v1.y;
+        const len2 = ldx*ldx + ldy*ldy;
+        if (len2 < 1) continue;
+        const t = Math.max(0, Math.min(1, ((nx - v1.x)*ldx + (ny - v1.y)*ldy) / len2));
+        const closestX = v1.x + t * ldx, closestY = v1.y + t * ldy;
+        const cdx = nx - closestX, cdy = ny - closestY;
+        const cdist2 = cdx*cdx + cdy*cdy;
+
+        if (cdist2 < enemy.radius * enemy.radius) {
+            // One-sided: always blocks
+            if (ld.backSide < 0 || ld.frontSide < 0) {
+                return { x: enemy.x, y: enemy.y, blocked: true };
+            }
+            // Two-sided: check if opening is passable
+            const fSector = level.sectors[level.sidedefs[ld.frontSide].sector];
+            const bSector = level.sectors[level.sidedefs[ld.backSide].sector];
+            const stepH = Math.max(fSector.floorHeight, bSector.floorHeight);
+            const ceilH = Math.min(fSector.ceilHeight, bSector.ceilHeight);
+            if (ceilH - stepH >= 56) continue; // Opening is tall enough
+            return { x: enemy.x, y: enemy.y, blocked: true };
+        }
+    }
+    // Check against other enemies (avoid bunching)
+    for (const other of enemies) {
+        if (other === enemy || other.hp <= 0) continue;
+        const edx = nx - other.x, edy = ny - other.y;
+        if (edx*edx + edy*edy < (enemy.radius + other.radius) * (enemy.radius + other.radius) * 0.8) {
+            return { x: enemy.x, y: enemy.y, blocked: true };
+        }
+    }
+    return { x: nx, y: ny, blocked: false };
+}
+
+function hasLineOfSight(x1, y1, x2, y2) {
+    // Simple line-of-sight check using linedefs
+    const dx = x2 - x1, dy = y2 - y1;
+    for (const ld of level.linedefs) {
+        if (ld.backSide >= 0 && ld.frontSide >= 0) {
+            // Two-sided - check if it blocks view
+            const fs = level.sectors[level.sidedefs[ld.frontSide].sector];
+            const bs = level.sectors[level.sidedefs[ld.backSide].sector];
+            const minCeil = Math.min(fs.ceilHeight, bs.ceilHeight);
+            const maxFloor = Math.max(fs.floorHeight, bs.floorHeight);
+            if (minCeil - maxFloor > 0) continue; // Opening exists
+        }
+
+        const v1 = level.vertices[ld.v1], v2 = level.vertices[ld.v2];
+        if (!v1 || !v2) continue;
+        const ldx = v2.x - v1.x, ldy = v2.y - v1.y;
+        const denom = dx * ldy - dy * ldx;
+        if (Math.abs(denom) < 0.001) continue;
+        const t = ((v1.x - x1) * ldy - (v1.y - y1) * ldx) / denom;
+        const u = ((v1.x - x1) * dy - (v1.y - y1) * dx) / denom;
+        if (t > 0.01 && t < 0.99 && u >= 0 && u <= 1) return false;
+    }
+    return true;
+}
+
+/* ============================================================
+ *  Shooting
+ * ============================================================ */
+let playerShootCooldown = 0;
+const PLAYER_SHOOT_COOLDOWN = 12; // ticks between shots (~600ms)
+
+function playerShoot() {
+    if (gameState.ammo <= 0) return;
+    if (playerShootCooldown > 0) return;
+    gameState.shooting = 1;
+    shootTimer = SHOOT_RENDER_FRAMES;
+    playerShootCooldown = PLAYER_SHOOT_COOLDOWN;
+
+    // Hitscan: find closest enemy in crosshair
+    let bestDist = Infinity, bestIdx = -1;
+    for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        if (e.hp <= 0) continue;
+        const dx = e.x - playerX, dy = e.y - playerY;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const ang = Math.atan2(dy, dx) - playerAngle;
+        const na = normalizeAngle(ang);
+        if (Math.abs(na) < 0.15 && dist < bestDist) { // ~8 degree cone
+            bestDist = dist;
+            bestIdx = i;
+        }
+    }
+
+    if (bestIdx >= 0) {
+        const e = enemies[bestIdx];
+        const dmg = 10 + Math.floor(Math.random() * 10);
+        e.hp -= dmg;
+        if (e.hp <= 0) {
+            e.hp = 0;
+            e.state = 5;
+            enemyDeathTimers[bestIdx] = DEATH_RENDER_FRAMES;
+            gameState.kills++;
+            const v = compileResult.meta.variables;
+            isaInterpreter.writeVar(v.kills, gameState.kills);
+        } else {
+            e.state = 4; // pain
+            e.painTimer = 8;
+            isFaceOuch = false; // player attacking, not hurt
+        }
+    }
+}
+
+/* ============================================================
+ *  Input
+ * ============================================================ */
+const keysDown = new Set();
+let mouseLockedIn = false;
+
+function respawnPlayer() {
+    if (!playerDead || deathTimer < DEATH_RESPAWN_DELAY) return;
+
+    // Reset position to player start
+    const playerStart = level.things.find(t => t.type === 1);
+    if (playerStart) {
+        playerX = playerStart.x;
+        playerY = playerStart.y;
+        playerAngle = playerStart.angle * Math.PI / 180;
+    }
+    playerZ = getPlayerSectorHeight() + PLAYER_HEIGHT;
+
+    // Reset game state
+    gameState.hp = 100;
+    gameState.armor = 0;
+    gameState.ammo = 50;
+    gameState.shooting = 0;
+    playerShootCooldown = 0;
+    shootTimer = 0;
+    playerDead = false;
+    deathTimer = 0;
+
+    // Write to ISA
+    const v = compileResult.meta.variables;
+    isaInterpreter.writeVar(v.hp, 100);
+    isaInterpreter.writeVar(v.armor, 0);
+    isaInterpreter.writeVar(v.ammo, 50);
+    isaInterpreter.writeVar(v.damage_in, 0);
+}
+
+document.addEventListener('keydown', e => {
+    // Respawn on any key when dead
+    if (playerDead && deathTimer >= DEATH_RESPAWN_DELAY) {
+        e.preventDefault();
+        respawnPlayer();
+        return;
+    }
+
+    const k = e.key.toLowerCase();
+    if (['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright',' ','e'].includes(k)) {
+        e.preventDefault();
+        keysDown.add(k);
+    }
+});
+document.addEventListener('keyup', e => keysDown.delete(e.key.toLowerCase()));
+
+vpCanvas.addEventListener('click', () => {
+    vpCanvas.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => {
+    mouseLockedIn = document.pointerLockElement === vpCanvas;
+});
+document.addEventListener('mousemove', e => {
+    if (mouseLockedIn) {
+        playerAngle -= e.movementX * MOUSE_SENSITIVITY;
+    }
+});
+vpCanvas.addEventListener('mousedown', e => {
+    if (playerDead && deathTimer >= DEATH_RESPAWN_DELAY) { respawnPlayer(); return; }
+    if (mouseLockedIn && e.button === 0) playerShoot();
+});
+
+function processInput() {
+    const cos = Math.cos(playerAngle), sin = Math.sin(playerAngle);
+    let moveX = 0, moveY = 0;
+
+    if (keysDown.has('w') || keysDown.has('arrowup')) { moveX += cos * MOVE_SPEED; moveY += sin * MOVE_SPEED; }
+    if (keysDown.has('s') || keysDown.has('arrowdown')) { moveX -= cos * MOVE_SPEED; moveY -= sin * MOVE_SPEED; }
+    if (keysDown.has('a')) { moveX -= sin * MOVE_SPEED * 0.7; moveY += cos * MOVE_SPEED * 0.7; }
+    if (keysDown.has('d')) { moveX += sin * MOVE_SPEED * 0.7; moveY -= cos * MOVE_SPEED * 0.7; }
+    if (keysDown.has('arrowleft')) playerAngle += TURN_SPEED;
+    if (keysDown.has('arrowright')) playerAngle -= TURN_SPEED;
+    if (keysDown.has(' ')) playerShoot();
+    if (keysDown.has('e')) { tryUseDoor(); keysDown.delete('e'); }
+
+    if (moveX !== 0 || moveY !== 0) {
+        const result = tryMove(playerX, playerY, playerX + moveX, playerY + moveY);
+        playerX = result.x;
+        playerY = result.y;
+    }
+
+    // Update Z based on sector floor height
+    const floorH = getPlayerSectorHeight();
+    playerZ = floorH + PLAYER_HEIGHT;
+}
+
+/* ============================================================
+ *  Game Loop
+ * ============================================================ */
+let gameRunning = false;
+let lastTickTime = 0;
+const TICK_INTERVAL = 50; // 20 ticks per second
+let playerDead = false;
+let deathTimer = 0;
+const DEATH_COLLAPSE_TICKS = 30; // camera sinks over this many ticks
+const DEATH_RESPAWN_DELAY = 60;  // total ticks before respawn prompt
+
+async function gameLoop(timestamp) {
+    if (!gameRunning) return;
+
+    if (playerDead) {
+        // Death sequence
+        if (timestamp - lastTickTime >= TICK_INTERVAL) {
+            deathTimer++;
+            // Sink camera during collapse phase
+            if (deathTimer <= DEATH_COLLAPSE_TICKS) {
+                playerZ -= 1.2;
+            }
+            lastTickTime = timestamp;
+        }
+
+        // Still render the world (fallen view)
+        renderFrame++;
+        renderBSP();
+        vpCtx.putImageData(vpImageData, 0, 0);
+        drawAllSprites(vpCtx);
+
+        // Red tint overlay
+        const alpha = Math.min(0.6, deathTimer / DEATH_COLLAPSE_TICKS * 0.6);
+        vpCtx.fillStyle = `rgba(180,0,0,${alpha})`;
+        vpCtx.fillRect(0, 0, SCR_W, SCR_H);
+
+        // "YOU DIED" text after collapse
+        if (deathTimer > DEATH_COLLAPSE_TICKS) {
+            vpCtx.fillStyle = '#ff3333';
+            vpCtx.font = 'bold 16px monospace';
+            vpCtx.textAlign = 'center';
+            vpCtx.fillText('YOU DIED', SCR_W / 2, SCR_H / 2 - 10);
+            if (deathTimer > DEATH_RESPAWN_DELAY) {
+                vpCtx.fillStyle = '#aaa';
+                vpCtx.font = '8px monospace';
+                vpCtx.fillText('Press any key to respawn', SCR_W / 2, SCR_H / 2 + 8);
+            }
+            vpCtx.textAlign = 'start';
+        }
+
+        renderHUD();
+        renderMinimap();
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+
+    // Check for death
+    if (gameState.hp <= 0) {
+        playerDead = true;
+        deathTimer = 0;
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+
+    processInput();
+
+    // Run game tick at fixed interval
+    if (timestamp - lastTickTime >= TICK_INTERVAL) {
+        await runGameTick();
+        updateDoors();
+        checkWalkTriggers();
+        if (playerShootCooldown > 0) playerShootCooldown--;
+        lastTickTime = timestamp;
+    }
+
+    // Update timers
+    renderFrame++;
+    if (shootTimer > 0) shootTimer--;
+    for (let i = 0; i < enemyDeathTimers.length; i++) {
+        if (enemyDeathTimers[i] > 0) enemyDeathTimers[i]--;
+    }
+
+    // Render BSP walls/floors/ceilings
+    renderBSP();
+
+    // Put pixel buffer to canvas
+    vpCtx.putImageData(vpImageData, 0, 0);
+
+    // Draw enemy sprites (canvas-based with depth clipping)
+    drawAllSprites(vpCtx);
+
+    // Draw weapon
+    drawShotgun(vpCtx);
+
+    // Draw crosshair
+    vpCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+    vpCtx.lineWidth = 1;
+    vpCtx.beginPath();
+    vpCtx.moveTo(SCR_W/2-5, SCR_H/2); vpCtx.lineTo(SCR_W/2-2, SCR_H/2);
+    vpCtx.moveTo(SCR_W/2+2, SCR_H/2); vpCtx.lineTo(SCR_W/2+5, SCR_H/2);
+    vpCtx.moveTo(SCR_W/2, SCR_H/2-5); vpCtx.lineTo(SCR_W/2, SCR_H/2-2);
+    vpCtx.moveTo(SCR_W/2, SCR_H/2+2); vpCtx.lineTo(SCR_W/2, SCR_H/2+5);
+    vpCtx.stroke();
+
+    renderHUD();
+    renderMinimap();
+
+    requestAnimationFrame(gameLoop);
+}
+
+/* ============================================================
+ *  Init
+ * ============================================================ */
+async function loadAndStart(ab) {
+    const status = document.getElementById('wadLoadStatus');
+
+    status.textContent = 'Parsing WAD...';
+    await new Promise(r => setTimeout(r, 10));
+    lumpsArr = parseWAD(ab);
+    doomPalette = extractPalette(lumpsArr);
+    patchNames = extractPatchNames(lumpsArr);
+    textureDefs = parseTextureDefs(lumpsArr);
+
+    status.textContent = 'Extracting E1M1...';
+    await new Promise(r => setTimeout(r, 10));
+    level = extractLevel(lumpsArr, 'E1M1');
+    console.log(`E1M1: ${level.vertices.length} vertices, ${level.linedefs.length} linedefs, ${level.sectors.length} sectors, ${level.nodes.length} nodes, ${level.things.length} things`);
+
+    // Find player start (thing type 1)
+    const playerStart = level.things.find(t => t.type === 1);
+    if (playerStart) {
+        playerX = playerStart.x;
+        playerY = playerStart.y;
+        playerAngle = playerStart.angle * Math.PI / 180;
+    }
+    playerZ = getPlayerSectorHeight() + PLAYER_HEIGHT;
+
+    status.textContent = 'Extracting sprites & HUD...';
+    await new Promise(r => setTimeout(r, 10));
+    loadSpritesAndHUD();
+
+    status.textContent = 'Compiling game logic...';
+    await new Promise(r => setTimeout(r, 10));
+    initISA();
+    initEnemies();
+
+    // Write enemy type indices to ISA
+    const v = compileResult.meta.variables;
+    for (let i = 0; i < enemies.length; i++) {
+        isaInterpreter.writeVar(v.e_type + i, getEnemyTypeIdx(enemies[i].type));
+    }
+
+    // Build the network visualization panel
+    const cfg = compileResult.config;
+    document.getElementById('networkPanel').innerHTML = buildNetworkPanelHTML();
+    // Update labels to match DOOM config (164×2048 instead of default 155×1024)
+    document.querySelectorAll('#networkPanel .panel-title')[0].textContent = 'Loom Transformer: 8 Layers';
+    document.querySelectorAll('#networkPanel .panel-title')[1].innerHTML = `State Tensor: ${cfg.d_model} &times; ${cfg.n}`;
+    document.querySelector('#networkPanel [data-layer="input"] .layer-name').innerHTML =
+        `State Tensor <span style="color:#374151">${cfg.d_model}&times;${cfg.n}</span>`;
+    // Fix canvas sizes for the DOOM config
+    const scratchC = document.getElementById('stateCanvasScratch');
+    const dataC = document.getElementById('stateCanvasData');
+    if (scratchC) { scratchC.width = cfg.s; scratchC.height = cfg.d_model; }
+    if (dataC) { dataC.width = cfg.n - cfg.s; dataC.height = cfg.d_model; }
+    // Fix column labels
+    const colLabels = document.querySelectorAll('#networkPanel [style*="font-size:0.6rem"]');
+    if (colLabels[0]) colLabels[0].textContent = `Cols 0–${cfg.s - 1}`;
+    if (colLabels[1]) colLabels[1].textContent = `Cols ${cfg.s}–${cfg.n - 1}`;
+    // Fix description
+    const descLabels = document.querySelectorAll('#networkPanel [style*="font-size:0.55rem"]');
+    if (descLabels[1]) descLabels[1].innerHTML = `Memory (${cfg.s}–${cfg.s+cfg.m-1}) &middot; Instructions (${cfg.s+cfg.m}+)`;
+    // Update row labels for d_model=164
+    const heatmapLabels = document.querySelector('#networkPanel .heatmap-labels');
+    if (heatmapLabels) {
+        const idxs = cfg;
+        heatmapLabels.innerHTML = `
+            <div class="heatmap-label"><div class="heatmap-swatch" style="background:#3b82f6"></div><span class="heatmap-label-text">Instructions (rows 0-${idxs.idx_memory-1})</span></div>
+            <div class="heatmap-label"><div class="heatmap-swatch" style="background:#10b981"></div><span class="heatmap-label-text">Memory (rows ${idxs.idx_memory}-${idxs.idx_scratchpad-1})</span></div>
+            <div class="heatmap-label"><div class="heatmap-swatch" style="background:#8b5cf6"></div><span class="heatmap-label-text">Scratchpad (rows ${idxs.idx_scratchpad}-${idxs.idx_pc-1})</span></div>
+            <div class="heatmap-label"><div class="heatmap-swatch" style="background:#f59e0b"></div><span class="heatmap-label-text">PC (rows ${idxs.idx_pc}-${idxs.idx_pos_enc-1})</span></div>
+            <div class="heatmap-label"><div class="heatmap-swatch" style="background:#6b7280"></div><span class="heatmap-label-text">Position Encoding (rows ${idxs.idx_pos_enc}-${idxs.idx_buffer-1})</span></div>
+            <div class="heatmap-label"><div class="heatmap-swatch" style="background:#ef4444"></div><span class="heatmap-label-text">Buffer (rows ${idxs.idx_buffer}-${idxs.idx_tag-1})</span></div>
+            <div class="heatmap-label"><div class="heatmap-swatch" style="background:#64748b"></div><span class="heatmap-label-text">Tags + Indicator (rows ${idxs.idx_tag}-${cfg.d_model-1})</span></div>`;
+    }
+    // Initial heatmap render
+    isaInterpreter.syncToState(stateTensor, cfg);
+    renderHeatmap(null, stateTensor, cfg);
+    updateStat('statBackend', 'ISA');
+    updateStat('statSteps', 0);
+    updateStat('statTotal', 0);
+
+    document.getElementById('wadUpload').style.display = 'none';
+    document.getElementById('gameArea').style.display = 'block';
+
+    gameRunning = true;
+    requestAnimationFrame(gameLoop);
+}
+
+// Mode toggle: ISA Interpreter <-> ONNX Transformer
+document.getElementById('modeBtn').addEventListener('click', function() {
+    if (!onnxLoaded) {
+        this.textContent = 'Loading ONNX...';
+        loadONNXModel('programs/argmax_164x2048.onnx').then(backend => {
+            onnxLoaded = true;
+            useV4 = true;
+            this.textContent = 'ONNX Transformer';
+            this.style.background = '#6366f1';
+            this.style.borderColor = '#6366f1';
+            document.getElementById('v4Status').style.display = '';
+            document.getElementById('v4Status').textContent = 'ONNX ' + backend;
+            updateStat('statBackend', 'ONNX ' + backend);
+            // Build state tensor from ISA
+            stateTensor = buildStateTensor(compileResult);
+            _currentState = stateTensor;
+            _currentConfig = compileResult.config;
+            isaInterpreter.syncToState(stateTensor, compileResult.config);
+            console.log('ONNX transformer loaded:', backend);
+        }).catch(err => {
+            this.textContent = 'ISA Interpreter';
+            console.error('Failed to load ONNX:', err);
+        });
+        return;
+    }
+    useV4 = !useV4;
+    if (useV4) {
+        isaInterpreter.syncToState(stateTensor, compileResult.config);
+        this.textContent = 'ONNX Transformer';
+        this.style.background = '#6366f1';
+        this.style.borderColor = '#6366f1';
+    } else {
+        isaInterpreter.syncFromState(stateTensor, compileResult.config);
+        this.textContent = 'ISA Interpreter';
+        this.style.background = '#10b981';
+        this.style.borderColor = '#10b981';
+    }
+});
+
+// Auto-load doom1.wad on page load
+(async function autoLoad() {
+    const status = document.getElementById('wadLoadStatus');
+    try {
+        const resp = await fetch('doom1.wad');
+        if (!resp.ok) throw new Error('doom1.wad not found');
+        const ab = await resp.arrayBuffer();
+        loadAndStart(ab);
+    } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+    }
+})();
+
+</script>
+</body>
+</html>

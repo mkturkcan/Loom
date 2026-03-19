@@ -1,0 +1,51 @@
+{
+  "name": "fibonacci",
+  "title": "Fibonacci",
+  "description": "Compute the 7th Fibonacci number",
+  "source": "int main() {\n    int a = 0;\n    int b = 1;\n    int n = 7;\n    int i = 0;\n    while (i < n) {\n        int t = a + b;\n        a = b;\n        b = t;\n        i += 1;\n    }\n    return a;\n}\n",
+  "variables": {
+    "a": 9,
+    "b": 10,
+    "n": 11,
+    "i": 13,
+    "t": 14
+  },
+  "num_instructions": 17,
+  "opcode_counts": {
+    "MOV": 10,
+    "SUB": 1,
+    "CMP": 1,
+    "JMP": 2,
+    "ADD": 2,
+    "HALT": 1
+  },
+  "source_map": {
+    "96": 2,
+    "97": 3,
+    "98": 4,
+    "99": 5,
+    "100": 6,
+    "104": 7,
+    "107": 8,
+    "108": 9,
+    "109": 10,
+    "111": 12
+  },
+  "retval_addr": 7,
+  "output_addr": 8,
+  "expected": {
+    "RETVAL": 13
+  },
+  "config": {
+    "s": 32,
+    "m": 64,
+    "n": 1024,
+    "N": 8,
+    "d_model": 155,
+    "logn": 10,
+    "idx_memory": 30,
+    "idx_pc": 84,
+    "idx_pos_enc": 94,
+    "idx_tag": 146
+  }
+}

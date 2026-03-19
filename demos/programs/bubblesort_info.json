@@ -1,0 +1,63 @@
+{
+  "name": "bubblesort",
+  "title": "Bubble Sort",
+  "description": "Sort 6 numbers using bubble sort",
+  "source": "int main() {\n    int a[6];\n    a[0] = 34;\n    a[1] = 12;\n    a[2] = 45;\n    a[3] = 7;\n    a[4] = 23;\n    a[5] = 18;\n    int n = 6;\n    int i = 0;\n    while (i < n) {\n        int j = 0;\n        while (j < n - 1 - i) {\n            int aj = a[j];\n            int aj1 = a[j + 1];\n            if (aj > aj1) {\n                a[j] = aj1;\n                a[j + 1] = aj;\n            }\n            j += 1;\n        }\n        i += 1;\n    }\n    return a[0];\n}\n",
+  "variables": {
+    "a": 9,
+    "n": 21,
+    "i": 23,
+    "j": 24,
+    "aj": 25,
+    "aj1": 27
+  },
+  "num_instructions": 102,
+  "opcode_counts": {
+    "MOV": 44,
+    "SUB": 17,
+    "CMP": 3,
+    "JMP": 17,
+    "ADD": 6,
+    "LOAD": 2,
+    "JNZ": 12,
+    "HALT": 1
+  },
+  "source_map": {
+    "96": 3,
+    "97": 4,
+    "98": 5,
+    "99": 6,
+    "100": 7,
+    "101": 8,
+    "102": 9,
+    "103": 10,
+    "104": 11,
+    "108": 12,
+    "109": 13,
+    "116": 14,
+    "120": 15,
+    "126": 16,
+    "130": 17,
+    "160": 18,
+    "192": 20,
+    "194": 22,
+    "196": 24
+  },
+  "retval_addr": 7,
+  "output_addr": 8,
+  "expected": {
+    "RETVAL": 7
+  },
+  "config": {
+    "s": 32,
+    "m": 64,
+    "n": 1024,
+    "N": 8,
+    "d_model": 155,
+    "logn": 10,
+    "idx_memory": 30,
+    "idx_pc": 84,
+    "idx_pos_enc": 94,
+    "idx_tag": 146
+  }
+}

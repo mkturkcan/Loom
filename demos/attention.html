@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loom — Attention Patterns</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, sans-serif;
+  background: #fff;
+  color: #1f2937;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 20px 80px;
+}
+h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+.subtitle { font-size: 0.82rem; color: #6b7280; margin-top: 4px; line-height: 1.6; }
+nav { margin: 20px 0 28px; display: flex; gap: 6px; flex-wrap: wrap; }
+nav button {
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  padding: 6px 14px; border-radius: 6px;
+  border: 1px solid #e5e7eb; background: #fff; color: #374151;
+  cursor: pointer; transition: all 0.15s;
+}
+nav button:hover { border-color: #93c5fd; background: #eff6ff; }
+nav button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.pattern { display: none; }
+.pattern.active { display: block; }
+
+.pattern h2 {
+  font-size: 1.15rem; font-weight: 700; margin-bottom: 4px;
+  display: flex; align-items: center; gap: 8px;
+}
+.pattern h2 .badge {
+  font-size: 10px; font-weight: 700; padding: 2px 8px;
+  border-radius: 4px; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.badge-att { background: #dbeafe; color: #1d4ed8; }
+.badge-ffn { background: #ede9fe; color: #6d28d9; }
+
+.pattern .desc {
+  font-size: 0.82rem; color: #6b7280; line-height: 1.7;
+  margin-bottom: 16px; max-width: 700px;
+}
+.pattern .desc strong { color: #374151; }
+.pattern .desc code {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
+  background: #f3f4f6; padding: 1px 5px; border-radius: 3px; color: #6366f1;
+}
+
+/* ── Diagram area ──────────────────────────────── */
+.diagram {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.diagram-main { flex: 1; min-width: 400px; }
+.diagram-side {
+  width: 260px; flex-shrink: 0;
+  font-size: 0.78rem; color: #6b7280; line-height: 1.7;
+}
+.diagram-side h4 {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: #9ca3af; margin-bottom: 6px;
+}
+.diagram-side .step {
+  margin-bottom: 12px; padding-left: 16px; position: relative;
+}
+.diagram-side .step::before {
+  content: attr(data-n);
+  position: absolute; left: 0; top: 0;
+  font-size: 10px; font-weight: 700; color: #3b82f6;
+}
+.diagram-side .step strong { color: #374151; }
+
+/* ── State tensor mini ────────────────────────── */
+.state-mini {
+  background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px;
+  padding: 16px; overflow-x: auto;
+}
+.state-mini table {
+  border-collapse: collapse; font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.state-mini th, .state-mini td {
+  padding: 3px 7px; text-align: center; white-space: nowrap;
+}
+.state-mini th {
+  font-size: 9px; font-weight: 700; color: #9ca3af;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  border-bottom: 1px solid #e5e7eb;
+}
+.state-mini .row-label {
+  text-align: right; font-size: 9px; color: #6b7280;
+  font-weight: 600; padding-right: 10px;
+}
+.state-mini .bp { font-weight: 500; }
+.bp.pos { color: #059669; }
+.bp.neg { color: #dc2626; }
+.bp.zero { color: #d1d5db; }
+
+.cell-highlight { background: #fef3c7 !important; }
+.cell-match { background: #dcfce7 !important; }
+.cell-result { background: #dbeafe !important; }
+.cell-dim { opacity: 0.3; }
+
+/* ── Score visualization ──────────────────────── */
+.scores-row {
+  display: flex; align-items: center; gap: 4px;
+  margin: 12px 0 6px; font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.scores-row .score-cell {
+  width: 56px; height: 28px; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 10px; color: #fff;
+  transition: transform 0.2s;
+}
+.scores-row .score-cell:hover { transform: scale(1.1); }
+.scores-row .score-label {
+  font-size: 9px; color: #9ca3af; font-weight: 600;
+  width: 70px; text-align: right; padding-right: 6px;
+}
+
+/* ── Formula blocks ──────────────────────────── */
+.formula {
+  background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px;
+  padding: 12px 16px; margin: 12px 0;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  line-height: 1.8; color: #374151;
+}
+.formula .comment { color: #9ca3af; font-size: 11px; }
+.formula .keyword { color: #7c3aed; font-weight: 600; }
+.formula .val { color: #059669; font-weight: 600; }
+.formula .op { color: #3b82f6; }
+
+/* ── Key insight boxes ────────────────────────── */
+.insight {
+  background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px;
+  padding: 12px 16px; margin: 16px 0;
+  font-size: 0.8rem; color: #92400e; line-height: 1.6;
+}
+.insight strong { color: #78350f; }
+
+/* ── Separator ──────────────────────────────────── */
+.sep {
+  height: 1px; background: #e5e7eb; margin: 28px 0;
+}
+
+/* ── Back link ──────────────────────────────────── */
+.back {
+  display: inline-block; font-size: 12px; color: #6b7280;
+  text-decoration: none; margin-bottom: 16px;
+}
+.back:hover { color: #3b82f6; }
+</style>
+</head>
+<body>
+
+<div style="display:flex;gap:16px;align-items:center;margin-bottom:4px;font-size:13px">
+  <a href="index.html" class="back">&larr; Back</a>
+  <a href="opcode_flow.html" style="color:#6366f1;text-decoration:none;font-weight:500">Opcode Data Flow &rarr;</a>
+</div>
+<h1>Attention Patterns in Loom</h1>
+<p class="subtitle">
+  Five attention tricks let 8 transformer layers execute a 22-opcode ISA.
+  All use <strong>symmetric Q=K</strong> with <strong>&lambda;=10</strong> temperature scaling
+  to approximate hard attention via softmax.
+  Click each pattern to see how Q, K, V, and scores work on a concrete example.
+</p>
+
+<nav id="nav"></nav>
+<div id="patterns"></div>
+
+<script>
+// ════════════════════════════════════════════════════════
+// DATA
+// ════════════════════════════════════════════════════════
+
+// Bipolar helpers
+const B = (v) => v > 0 ? '+1' : '-1';
+const BC = (v) => v > 0 ? 'pos' : 'neg';
+
+// Mini state: 8 columns (col 0 = scratchpad, cols 1-3 = memory, cols 4-7 = program)
+// For demonstration with logn=3 (8 columns), N=4 (4-bit values)
+
+const PATTERNS = [
+
+// ── Pattern 1: PC Fetch ──────────────────────────────
+{
+  id: 'fetch',
+  title: 'L1: PC Fetch',
+  badge: 'att',
+  subtitle: '1-head symmetric attention fetches the current instruction',
+  desc: `
+    <strong>Goal:</strong> Read the instruction at the program counter.<br>
+    <strong>Mechanism:</strong> Q and K both project <code>PC</code> and <code>pos_enc</code> into the same
+    logn-dimensional space via addition. At column 0 (scratchpad), Q = PC + 0 = PC.
+    At other columns, K = 0 + pos_enc. The dot product Q·K is maximized where pos_enc matches PC.
+    V then copies that column's instruction bits into the buffer.<br>
+    <strong>Key trick:</strong> <code>Q = K</code> (symmetric, additive). Column 0 has pos_enc = 0 to prevent
+    self-matching interference. Temperature <code>&lambda;=10</code> sharpens softmax to near-hard attention.
+  `,
+  render: renderFetch,
+},
+
+// ── Pattern 2: Operand Read ──────────────────────────
+{
+  id: 'operand',
+  title: 'L2: 3-Head Operand Read',
+  badge: 'att',
+  subtitle: '3 attention heads read mem[a], mem[b], mem[c] simultaneously',
+  desc: `
+    <strong>Goal:</strong> After L1 fetches the instruction (a, b, c), read the three memory operands.<br>
+    <strong>Mechanism:</strong> Three independent attention heads, each with symmetric Q=K.
+    Head 1 matches <code>addr_a + pos_enc</code> to find mem[a].
+    Head 2 matches <code>addr_b + pos_enc</code> for mem[b].
+    Head 3 matches <code>addr_c + pos_enc</code> for mem[c].
+    Each head's V matrix copies the matched column's memory value to a different buffer slot
+    (<code>buf_a</code>, <code>buf_b</code>, <code>buf_c</code>).<br>
+    <strong>Key trick:</strong> The three heads fire <em>simultaneously</em> in a single attention operation.
+    Each head has non-overlapping Q/V rows, so they don't interfere.
+  `,
+  render: renderOperand,
+},
+
+// ── Pattern 3: Pointer Dereference ───────────────────
+{
+  id: 'load',
+  title: 'L3: Pointer Dereference (LOAD)',
+  badge: 'att',
+  subtitle: 'Head 1 of L3\'s 2-head attention: indirect memory read, mem[b] = mem[mem[c]]',
+  desc: `
+    <strong>Goal:</strong> Read the value at the address stored in mem[c] (pointer dereference).<br>
+    <strong>Mechanism:</strong> L2's FFN converts the N-bit pointer value in buf_c to a logn-bit position
+    encoding in <code>load_temp</code>. L3's attention head then matches
+    <code>load_temp + pos_enc</code> against all columns, finding the one whose position
+    matches the pointer. V copies that column's memory value to scr_min.<br>
+    <strong>Key trick:</strong> Two-stage indirection. L2 reads mem[c] (the pointer).
+    L2 FFN converts it to position-encoding format. L3 attention uses it to read mem[pointer].
+    The V weight is <code>2.0</code> (not 1.0) to account for the averaging effect.
+  `,
+  render: renderLoad,
+},
+
+// ── Pattern 4: Content Search ────────────────────────
+{
+  id: 'find',
+  title: 'L3: Content-Addressable Search (FIND)',
+  badge: 'att',
+  subtitle: 'Head 2 of L3\'s 2-head attention: search all memory for a value, return its address',
+  desc: `
+    <strong>Goal:</strong> Find which memory cell contains a given value and return its index.<br>
+    <strong>Mechanism:</strong> L2's FFN copies the search value from buf_c to <code>find_temp</code>.
+    L3's attention head matches <code>find_temp + idx_memory</code>, comparing the
+    search value against the <em>actual memory contents</em> of every column. The column
+    with matching content gets highest score. V copies that column's <code>address tag</code>
+    (its own index) to scr_min.<br>
+    <strong>Key trick:</strong> Q reads <em>memory rows</em> not position rows. This flips the usual
+    pattern: instead of "find column at address X", it's "find column containing value X".
+    Address tags (each column stores its own index in a separate row block) provide the return value.
+  `,
+  render: renderFind,
+},
+
+// ── Pattern 5: Write via Attention ───────────────────
+{
+  id: 'write',
+  title: 'L5: Memory Write (2-Head)',
+  badge: 'att',
+  subtitle: '2 attention heads write to memory. Head 1 for normal writes, Head 2 for SWAP',
+  desc: `
+    <strong>Goal:</strong> Store the ALU result (scr_min) into mem[b].<br>
+    <strong>Mechanism:</strong> Two attention heads fire simultaneously.
+    Head 1 matches <code>addr_b + pos_enc</code> for normal writes.
+    Head 2 matches <code>addr_c + pos_enc</code> for SWAP (no-op for other opcodes).
+    V reads both <code>scr_min</code> and <code>memory</code> from the matched column.
+    The FFN then computes <code>2 &times; buffer &minus; old_memory</code>,
+    which overwrites the old value with the new one.<br>
+    <strong>Key trick:</strong> Transformers can only <em>add</em> to the state (residual connection).
+    To <em>overwrite</em> a value, we use the identity: <code>new = old + (2&times;buf &minus; old) &times; gate</code>,
+    where buf = 0.5&times;(result + old) comes from attention averaging, and the FFN uses a
+    ReLU-pair decomposition to apply the <code>2&times;buf &minus; old</code> correction only at the matched column.
+  `,
+  render: renderWrite,
+},
+
+];
+
+// ════════════════════════════════════════════════════════
+// RENDERING
+// ════════════════════════════════════════════════════════
+
+let activePattern = 'fetch';
+
+function buildNav() {
+  const nav = document.getElementById('nav');
+  PATTERNS.forEach(p => {
+    const btn = document.createElement('button');
+    btn.textContent = p.title;
+    btn.className = p.id === activePattern ? 'active' : '';
+    btn.onclick = () => {
+      activePattern = p.id;
+      document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.pattern').forEach(el => el.classList.toggle('active', el.id === 'p-' + p.id));
+    };
+    nav.appendChild(btn);
+  });
+}
+
+function buildPatterns() {
+  const container = document.getElementById('patterns');
+  PATTERNS.forEach(p => {
+    const div = document.createElement('div');
+    div.id = 'p-' + p.id;
+    div.className = 'pattern' + (p.id === activePattern ? ' active' : '');
+    div.innerHTML = `
+      <h2>${p.title} <span class="badge badge-${p.badge}">${p.badge === 'att' ? 'Attention' : 'FFN'}</span></h2>
+      <p class="desc">${p.desc}</p>
+      <div id="content-${p.id}"></div>
+    `;
+    container.appendChild(div);
+    p.render(document.getElementById('content-' + p.id));
+  });
+}
+
+// ── Helpers ──────────────────────────────────────────
+
+function bp(v) {
+  return `<span class="bp ${v > 0 ? 'pos' : v < 0 ? 'neg' : 'zero'}">${v > 0 ? '+1' : v < 0 ? '-1' : ' 0'}</span>`;
+}
+
+function bpRow(vals, classes) {
+  return vals.map((v, i) => {
+    const cls = classes?.[i] || '';
+    return `<td class="${cls}">${bp(v)}</td>`;
+  }).join('');
+}
+
+function makeScores(scores, labels, highlight) {
+  const max = Math.max(...scores);
+  const min = Math.min(...scores);
+  const range = max - min || 1;
+  return `<div class="scores-row">
+    <span class="score-label">Q·K scores:</span>
+    ${scores.map((s, i) => {
+      const t = (s - min) / range;
+      const r = Math.round(220 - t * 180);
+      const g = Math.round(220 - t * 100);
+      const b = Math.round(255 - t * 20);
+      const bg = i === highlight ? '#059669' : `rgb(${r},${g},${b})`;
+      const fg = (i === highlight || t > 0.7) ? '#fff' : '#374151';
+      return `<div class="score-cell" style="background:${bg};color:${fg}" title="Column ${i}: score ${s}">${s}</div>`;
+    }).join('')}
+  </div>
+  <div style="font-size:10px;color:#9ca3af;margin-left:76px">
+    ${labels.map((l, i) => `<span style="display:inline-block;width:56px;text-align:center">${l}</span>`).join('')}
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════
+// PATTERN 1: PC FETCH
+// ════════════════════════════════════════════════════════
+
+function renderFetch(el) {
+  // Example: 8 columns, PC = 5 (binary 101), logn = 3
+  // pos_enc for each column: col 0 = [0,0,0], col 1 = [0,0,1], ... col 5 = [1,0,1]
+  const pc = [1, -1, 1]; // 5 in bipolar
+  const posEnc = [
+    [0, 0, 0],     // col 0: zeroed (intentional!)
+    [-1, -1, 1],   // col 1: 001
+    [-1, 1, -1],   // col 2: 010
+    [-1, 1, 1],    // col 3: 011
+    [1, -1, -1],   // col 4: 100
+    [1, -1, 1],    // col 5: 101 ← matches PC
+    [1, 1, -1],    // col 6: 110
+    [1, 1, 1],     // col 7: 111
+  ];
+
+  // Q = K = [PC + pos_enc] (symmetric, additive projection into same logn-dim space)
+  // Column 0: Q = PC + 0 = PC (pos_enc zeroed). Column j: K = 0 + pos_enc(j) = pos_enc(j).
+  // Score(0, j) = Q_col0 · K_colj = PC · pos_enc(j)
+  const scores = posEnc.map(pe => {
+    let s = 0;
+    for (let i = 0; i < 3; i++) s += pc[i] * pe[i]; // PC · pos_enc
+    return s;
+  });
+  // col 0: 0 (zeroed pos_enc), col 5: 3 (perfect match), others vary
+
+  const colLabels = ['scr', 'mem0', 'mem1', 'mem2', 'prg4', 'prg5', 'prg6', 'prg7'];
+
+  el.innerHTML = `
+    <div class="diagram">
+      <div class="diagram-main">
+        <div class="state-mini">
+          <table>
+            <tr><th></th>${colLabels.map((l, i) => `<th>${l}</th>`).join('')}</tr>
+            <tr>
+              <td class="row-label">PC (col 0)</td>
+              ${[0,1,2,3,4,5,6,7].map(c => c === 0
+                ? `<td class="cell-highlight">${pc.map(v => bp(v)).join(' ')}</td>`
+                : `<td class="cell-dim">—</td>`).join('')}
+            </tr>
+            <tr>
+              <td class="row-label">pos_enc</td>
+              ${posEnc.map((pe, c) =>
+                `<td class="${c === 5 ? 'cell-match' : c === 0 ? 'cell-dim' : ''}">${pe.map(v => bp(v)).join(' ')}</td>`
+              ).join('')}
+            </tr>
+            <tr style="border-top:1px solid #e5e7eb">
+              <td class="row-label">instr (a,b,c)</td>
+              ${[0,1,2,3,4,5,6,7].map(c =>
+                c === 5 ? `<td class="cell-result"><strong>fetched →</strong></td>`
+                : c >= 4 ? `<td style="font-size:9px;color:#9ca3af">cmd</td>`
+                : `<td class="cell-dim">—</td>`
+              ).join('')}
+            </tr>
+          </table>
+        </div>
+
+        ${makeScores(scores, colLabels, 5)}
+
+        <div class="formula">
+          <span class="comment">// Q vector (read from column 0):</span><br>
+          Q = [<span class="val">PC</span>; <span class="val">pos_enc</span>] = [${pc.map(B).join(',')}; 0,0,0]<br><br>
+          <span class="comment">// K vectors (read from each column):</span><br>
+          K<sub>col</sub> = [<span class="val">PC</span>; <span class="val">pos_enc</span>]<br>
+          <span class="comment">// Col 0: pos_enc = [0,0,0] (zeroed!) → score = 0</span><br>
+          <span class="comment">// Col 5: pos_enc = [+1,-1,+1] = PC → score = 6 (maximum)</span><br><br>
+          score = <span class="op">&lambda;</span> &times; Q &middot; K = <span class="val">10</span> &times; &sum; q<sub>i</sub>k<sub>i</sub><br>
+          attn = <span class="keyword">softmax</span>(scores) &asymp; [0, 0, 0, 0, 0, <span class="val">1</span>, 0, 0]<br><br>
+          <span class="comment">// V copies instruction bits from matched column to buffer:</span><br>
+          buf = V &times; X &times; attn = <span class="val">instruction at col 5</span>
+        </div>
+      </div>
+      <div class="diagram-side">
+        <h4>Step by Step</h4>
+        <div class="step" data-n="1">
+          <strong>Q reads PC</strong> from column 0 (the scratchpad column).
+          PC = 5 → bipolar [+1, −1, +1].
+        </div>
+        <div class="step" data-n="2">
+          <strong>K reads pos_enc</strong> from every column. Column 5 has pos_enc = [+1, −1, +1],
+          matching PC exactly. Column 0 has pos_enc = [0, 0, 0] (intentionally zeroed).
+        </div>
+        <div class="step" data-n="3">
+          <strong>Dot product Q·K</strong> for each column. The match at column 5 gives the maximum score.
+          λ=10 scaling amplifies the gap before softmax.
+        </div>
+        <div class="step" data-n="4">
+          <strong>V copies</strong> the instruction bits (a, b, c fields) from the winning column
+          into the buffer region of column 0.
+        </div>
+      </div>
+    </div>
+
+    <div class="insight">
+      <strong>Why column 0's pos_enc is zeroed:</strong>
+      Q = K projects PC + pos_enc additively. At column 0, both PC and pos_enc contribute to Q.
+      If column 0 had pos_enc = [−1, −1, −1] (encoding address 0), its self-attention score Q₀·K₀
+      would include PC·PC + PC·pos_enc + pos_enc·PC + pos_enc·pos_enc terms, potentially
+      competing with the actual target column. Zeroing pos_enc at column 0 ensures the scratchpad
+      column never wins the attention race against real memory/program columns.
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════════════════
+// PATTERN 2: 3-HEAD OPERAND READ
+// ════════════════════════════════════════════════════════
+
+function renderOperand(el) {
+  el.innerHTML = `
+    <div class="diagram">
+      <div class="diagram-main">
+        <div class="state-mini">
+          <table>
+            <tr><th></th><th>scr</th><th>mem[0]</th><th>mem[1]</th><th>mem[2]</th><th>mem[3]</th></tr>
+            <tr>
+              <td class="row-label">pos_enc</td>
+              <td class="cell-dim">0,0,0</td>
+              <td>${['-1','-1','+1'].map(v => `<span class="bp ${v[0]==='+' ? 'pos' : 'neg'}">${v}</span>`).join(' ')}</td>
+              <td>${['-1','+1','-1'].map(v => `<span class="bp ${v[0]==='+' ? 'pos' : 'neg'}">${v}</span>`).join(' ')}</td>
+              <td>${['-1','+1','+1'].map(v => `<span class="bp ${v[0]==='+' ? 'pos' : 'neg'}">${v}</span>`).join(' ')}</td>
+              <td>${['+1','-1','-1'].map(v => `<span class="bp ${v[0]==='+' ? 'pos' : 'neg'}">${v}</span>`).join(' ')}</td>
+            </tr>
+            <tr>
+              <td class="row-label">memory (N=4)</td>
+              <td class="cell-dim">—</td>
+              <td>val₀</td>
+              <td class="cell-highlight">val₁</td>
+              <td class="cell-match">val₂</td>
+              <td class="cell-result">val₃</td>
+            </tr>
+            <tr style="border-top:1px solid #e5e7eb">
+              <td class="row-label">scratch_cmd</td>
+              <td class="cell-highlight" style="font-size:9px">
+                a=<span class="bp pos">3</span>
+                b=<span class="bp pos">1</span>
+                c=<span class="bp pos">2</span>
+              </td>
+              <td class="cell-dim" colspan="4">—</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="formula">
+          <span class="comment">// Three heads fire simultaneously:</span><br><br>
+
+          <strong>Head 1</strong> (read mem[a=3]):<br>
+          Q₁ = K₁ = <span class="val">addr_a</span> + <span class="val">pos_enc</span> <span class="comment">// additive projection into logn-dim space</span><br>
+          V₁ copies matched column's memory + scratchpad → <span class="val">buf_a</span><br><br>
+
+          <strong>Head 2</strong> (read mem[b=1]):<br>
+          Q₂ = K₂ = <span class="val">addr_b</span> + <span class="val">pos_enc</span><br>
+          V₂ copies → <span class="val">buf_b</span><br><br>
+
+          <strong>Head 3</strong> (read mem[c=2]):<br>
+          Q₃ = K₃ = <span class="val">addr_c</span> + <span class="val">pos_enc</span><br>
+          V₃ copies → <span class="val">buf_c</span><br><br>
+
+          <span class="comment">// All three heads use non-overlapping buffer rows,</span><br>
+          <span class="comment">// so they don't interfere with each other.</span><br>
+          result = X + V₁·X·attn₁ + V₂·X·attn₂ + V₃·X·attn₃
+        </div>
+      </div>
+      <div class="diagram-side">
+        <h4>Step by Step</h4>
+        <div class="step" data-n="1">
+          L1 already fetched the instruction into <strong>scratch_cmd</strong> in column 0.
+          scratch_cmd contains addr_a, addr_b, addr_c (3 × logn bits).
+        </div>
+        <div class="step" data-n="2">
+          Each head's Q/K projects a different address field of scratch_cmd
+          added with pos_enc into the same logn-dimensional space. Column 0's pos_enc is zero,
+          so Q at col 0 = addr only. Other columns have addr=0, so K = pos_enc only.
+        </div>
+        <div class="step" data-n="3">
+          K is symmetric (K=Q), read from every column's scratch_cmd + pos_enc.
+          Since only column 0 has scratch_cmd, the Q·K score = addr·pos_enc, finding the matching column.
+        </div>
+        <div class="step" data-n="4">
+          Head 1 writes to <strong>buf_a</strong> (rows buffer+0..N-1).<br>
+          Head 2 writes to <strong>buf_b</strong> (rows buffer+N..2N-1).<br>
+          Head 3 writes to <strong>buf_c</strong> (rows buffer+2N..3N-1).<br>
+          No overlap → no interference.
+        </div>
+      </div>
+    </div>
+
+    <div class="insight">
+      <strong>Why 3 heads, not 3 layers:</strong>
+      Multi-head attention lets all three operands be read in a single layer.
+      Without it, reading 3 operands would require 3 sequential attention layers.
+      This is the key mechanism that keeps the total layer count at 8.
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════════════════
+// PATTERN 3: LOAD (POINTER DEREFERENCE)
+// ════════════════════════════════════════════════════════
+
+function renderLoad(el) {
+  el.innerHTML = `
+    <div class="diagram">
+      <div class="diagram-main">
+        <div class="state-mini">
+          <table>
+            <tr><th></th><th>scr</th><th>mem[0]</th><th>mem[1]</th><th>mem[2]</th><th>mem[3]</th></tr>
+            <tr>
+              <td class="row-label">pos_enc</td>
+              <td class="cell-dim">0,0,0</td>
+              <td>${bp(-1)}${bp(-1)}${bp(1)}</td>
+              <td>${bp(-1)}${bp(1)}${bp(-1)}</td>
+              <td>${bp(-1)}${bp(1)}${bp(1)}</td>
+              <td class="cell-match">${bp(1)}${bp(-1)}${bp(-1)}</td>
+            </tr>
+            <tr>
+              <td class="row-label">load_temp</td>
+              <td class="cell-highlight">${bp(1)}${bp(-1)}${bp(-1)}</td>
+              <td class="cell-dim">—</td><td class="cell-dim">—</td>
+              <td class="cell-dim">—</td><td class="cell-dim">—</td>
+            </tr>
+            <tr>
+              <td class="row-label">memory</td>
+              <td class="cell-dim">—</td>
+              <td>7</td><td>3</td><td class="cell-highlight">→ ptr=3</td>
+              <td class="cell-result">42 ← target</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="formula">
+          <span class="comment">// LOAD b, c: mem[b] = mem[mem[c]]</span><br>
+          <span class="comment">// Example: mem[2] = 3 (pointer), mem[3] = 42 (target)</span><br><br>
+
+          <strong>L2:</strong> Head 3 reads mem[c=2] = <span class="val">3</span><br>
+          <strong>L2 FFN:</strong> Convert pointer 3 (N-bit) → pos_enc format (logn-bit):<br>
+          &nbsp;&nbsp;load_temp = to_pos_enc(<span class="val">3</span>) = [<span class="val">+1, -1, -1</span>]<br><br>
+
+          <strong>L3 Head 1:</strong><br>
+          Q = [<span class="val">load_temp</span>; pos_enc] from col 0<br>
+          K = [<span class="val">load_temp</span>; pos_enc] from each col<br>
+          <span class="comment">// load_temp in col 0 = [+1,-1,-1]</span><br>
+          <span class="comment">// pos_enc of col 3 = [+1,-1,-1] → max score!</span><br><br>
+
+          V = <span class="val">2.0</span> × I on memory rows<br>
+          <span class="comment">// Weight 2.0 compensates for attention averaging</span><br>
+          result = V × X × attn ≈ <span class="val">mem[3] = 42</span> → scr_min
+        </div>
+      </div>
+      <div class="diagram-side">
+        <h4>Two-Stage Indirection</h4>
+        <div class="step" data-n="1">
+          <strong>L2</strong>: Read mem[c] = 3 (this is the pointer value, not the final data).
+        </div>
+        <div class="step" data-n="2">
+          <strong>L2 FFN</strong>: Convert the N-bit value "3" to the logn-bit position encoding
+          format used by attention. Store in <strong>load_temp</strong>.
+        </div>
+        <div class="step" data-n="3">
+          <strong>L3</strong>: Attention matches load_temp against pos_enc of all columns.
+          Column 3 has pos_enc matching "3", so it wins.
+        </div>
+        <div class="step" data-n="4">
+          V copies <strong>mem[3] = 42</strong> into scr_min. The V weight is 2.0 to compensate
+          for the fact that attention produces a weighted average, not a direct copy.
+        </div>
+      </div>
+    </div>
+
+    <div class="insight">
+      <strong>Why V uses weight 2.0:</strong>
+      The attention score at the matched column is close to but not exactly 1.0
+      (softmax with λ=10 gives ~0.95-0.99). The residual connection means
+      the output is X + V·X·attn. Since we need the <em>full</em> value (not half),
+      V = 2·I ensures the attention-averaged result has the right magnitude
+      for downstream correction.
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════════════════
+// PATTERN 4: FIND (CONTENT-ADDRESSABLE SEARCH)
+// ════════════════════════════════════════════════════════
+
+function renderFind(el) {
+  el.innerHTML = `
+    <div class="diagram">
+      <div class="diagram-main">
+        <div class="state-mini">
+          <table>
+            <tr><th></th><th>scr</th><th>mem[0]</th><th>mem[1]</th><th>mem[2]</th><th>mem[3]</th></tr>
+            <tr>
+              <td class="row-label">memory value</td>
+              <td class="cell-dim">—</td>
+              <td>7</td>
+              <td class="cell-match">42 ← match!</td>
+              <td>3</td>
+              <td>19</td>
+            </tr>
+            <tr>
+              <td class="row-label">find_temp</td>
+              <td class="cell-highlight">42 (search)</td>
+              <td class="cell-dim">—</td><td class="cell-dim">—</td>
+              <td class="cell-dim">—</td><td class="cell-dim">—</td>
+            </tr>
+            <tr>
+              <td class="row-label">address tag</td>
+              <td class="cell-dim">—</td>
+              <td>0</td>
+              <td class="cell-result">1 ← returned</td>
+              <td>2</td>
+              <td>3</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="formula">
+          <span class="comment">// FIND b, c: mem[b] = index where mem[i] == mem[c]</span><br>
+          <span class="comment">// Search for value 42. Found at index 1 (first match).</span><br><br>
+
+          <strong>L3 Head 2:</strong><br>
+          Q = [<span class="val">find_temp</span>; <span class="val">idx_memory</span>] from col 0<br>
+          K = [<span class="val">find_temp</span>; <span class="val">idx_memory</span>] from each col<br><br>
+
+          <span class="comment">// Q reads find_temp (= 42 in bipolar) from col 0</span><br>
+          <span class="comment">// K reads idx_memory (actual memory values) from each column</span><br>
+          <span class="comment">// Dot product is maximized where memory content == search value</span><br><br>
+
+          V = <span class="val">2.0</span> × I on idx_tag rows (each column's own index)<br>
+          result = tag of matched column = <span class="val">1</span> → scr_min
+        </div>
+
+        <div class="insight" style="margin-top:16px">
+          <strong>Fetch vs Find: the Q/K flip</strong><br>
+          <table style="font-size:12px;margin-top:6px;border-collapse:collapse;width:100%">
+            <tr style="border-bottom:1px solid #fde68a">
+              <td style="padding:4px 8px;font-weight:600">Pattern</td>
+              <td style="padding:4px 8px;font-weight:600">Q/K match on</td>
+              <td style="padding:4px 8px;font-weight:600">V returns</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 8px">L1 Fetch</td>
+              <td style="padding:4px 8px">PC + <strong>pos_enc</strong></td>
+              <td style="padding:4px 8px">instruction bits</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 8px">L2 Read</td>
+              <td style="padding:4px 8px">addr + <strong>pos_enc</strong></td>
+              <td style="padding:4px 8px">memory value</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 8px">L3 LOAD</td>
+              <td style="padding:4px 8px">load_temp + <strong>pos_enc</strong></td>
+              <td style="padding:4px 8px">memory value</td>
+            </tr>
+            <tr style="background:#fef3c7">
+              <td style="padding:4px 8px">L3 FIND</td>
+              <td style="padding:4px 8px">find_temp + <strong>idx_memory</strong></td>
+              <td style="padding:4px 8px">address tag</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 8px">L5 Write</td>
+              <td style="padding:4px 8px">addr_b + <strong>pos_enc</strong></td>
+              <td style="padding:4px 8px">(overwrites memory)</td>
+            </tr>
+          </table>
+          All patterns match on <strong>pos_enc</strong> (address-based) except FIND,
+          which matches on <strong>idx_memory</strong> (content-based).
+        </div>
+      </div>
+      <div class="diagram-side">
+        <h4>Content vs Position</h4>
+        <div class="step" data-n="1">
+          <strong>Normal attention</strong> matches by position:
+          "give me the value at address X."
+          Q/K use <strong>pos_enc</strong> rows.
+        </div>
+        <div class="step" data-n="2">
+          <strong>FIND attention</strong> matches by content:
+          "give me the address of value X."
+          Q/K use <strong>idx_memory</strong> rows (the actual stored values).
+        </div>
+        <div class="step" data-n="3">
+          <strong>Address tags</strong> make this possible.
+          Each memory column stores its own index (0, 1, 2, ...)
+          in a separate row block (idx_tag).
+          V reads the tag → returns the address.
+        </div>
+        <div class="step" data-n="4">
+          If multiple columns have the same value (e.g., 42 at cols 1 and 3),
+          softmax gives them <strong>equal</strong> attention weights, producing a
+          weighted average of their tags (e.g., (1+3)/2 = 2).
+          In practice, the C compiler ensures FIND is used on arrays with unique values,
+          so this ambiguity doesn't arise.
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════════════════
+// PATTERN 5: MEMORY WRITE
+// ════════════════════════════════════════════════════════
+
+function renderWrite(el) {
+  el.innerHTML = `
+    <div class="diagram">
+      <div class="diagram-main">
+        <div class="state-mini">
+          <table>
+            <tr><th></th><th>scr</th><th>mem[0]</th><th>mem[1]</th><th>mem[2]</th><th>mem[3]</th></tr>
+            <tr>
+              <td class="row-label">scr_min (result)</td>
+              <td class="cell-highlight">new = 13</td>
+              <td class="cell-dim">—</td><td class="cell-dim">—</td>
+              <td class="cell-dim">—</td><td class="cell-dim">—</td>
+            </tr>
+            <tr>
+              <td class="row-label">memory (before)</td>
+              <td class="cell-dim">—</td>
+              <td>7</td>
+              <td class="cell-match">old = 5</td>
+              <td>3</td>
+              <td>42</td>
+            </tr>
+            <tr>
+              <td class="row-label">addr_b target</td>
+              <td class="cell-highlight">b = 1</td>
+              <td class="cell-dim">—</td><td class="cell-dim">—</td>
+              <td class="cell-dim">—</td><td class="cell-dim">—</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="formula">
+          <span class="comment">// Goal: overwrite mem[1] = 5 with scr_min = 13</span><br>
+          <span class="comment">// Problem: transformers can only ADD (residual connection)</span><br>
+          <span class="comment">// Solution: the 2·buf − old trick</span><br><br>
+
+          <strong>L5 Attention:</strong><br>
+          Q/K match addr_b=1 against pos_enc → col 1 wins<br>
+          V reads both <span class="val">scr_min</span> and <span class="val">memory</span> from matched col:<br>
+          &nbsp;&nbsp;buf = 0.5 × scr_min + 0.5 × old_mem <span class="comment">// attention averages</span><br>
+          &nbsp;&nbsp;buf = 0.5 × 13 + 0.5 × 5 = <span class="val">9</span><br><br>
+
+          <strong>L5 FFN (at matched column only):</strong><br>
+          delta = 2 × buf − old_mem<br>
+          delta = 2 × 9 − 5 = <span class="val">13</span><br>
+          new_mem = old_mem + delta − old_mem = <span class="val">13</span> ✓<br><br>
+
+          <span class="comment">// At non-matched columns:</span><br>
+          <span class="comment">// buf ≈ 0 (attention score near zero), delta ≈ 0</span><br>
+          <span class="comment">// Memory unchanged at other columns</span>
+        </div>
+      </div>
+      <div class="diagram-side">
+        <h4>The Overwrite Problem</h4>
+        <div class="step" data-n="1">
+          Transformers have <strong>residual connections</strong>:
+          output = input + layer(input). You can only <em>add</em> to the state,
+          never directly overwrite.
+        </div>
+        <div class="step" data-n="2">
+          <strong>Attention averaging:</strong> V is designed to read both the new value (scr_min)
+          and the old value (memory) with equal weight.
+          At the matched column, buf = (new + old) / 2.
+        </div>
+        <div class="step" data-n="3">
+          <strong>FFN correction:</strong> Computes 2 × buf − old = 2 × (new+old)/2 − old = new.
+          This is added via the residual connection, and the FFN also subtracts the old value,
+          achieving a net overwrite.
+        </div>
+        <div class="step" data-n="4">
+          At <strong>non-matched columns</strong>, attention scores are near zero,
+          so buf ≈ 0 and the FFN produces no change. Only the targeted column is modified.
+        </div>
+      </div>
+    </div>
+
+    <div class="insight">
+      <strong>The algebraic identity:</strong>
+      <code>new = old + (2 × (new+old)/2 − old) − old = old + new − old − old + old = new</code>.
+      This works because attention gives us (new+old)/2, and the FFN can compute 2x−y
+      using ReLU gates. The key constraint is that both old and new values must be accessible
+      at the matched column, which attention naturally provides.
+    </div>
+
+    <div class="sep"></div>
+
+    <h3 style="font-size:0.95rem;margin-bottom:8px">SWAP: Two-Head Simultaneous Write</h3>
+    <p class="desc">
+      SWAP uses <strong>two attention heads</strong> in L5 to write to two different memory cells simultaneously.
+      Head 1 writes scr_min (= old mem[c]) → mem[b]. Head 2 writes buf_c (= old mem[b]) → mem[c].
+      Both heads use the same Q=K symmetric pattern but with different address fields (addr_b vs addr_c).
+      The FFN applies the 2·buf − old correction independently at each matched column.
+    </p>
+  `;
+}
+
+// ════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════
+
+buildNav();
+buildPatterns();
+
+</script>
+</body>
+</html>

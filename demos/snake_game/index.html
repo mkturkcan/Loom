@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snake — Loom</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <link rel="stylesheet" href="../common.css">
+    <style>
+        /* Snake-specific styles */
+        .game-board {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 2px;
+            background: #e5e7eb;
+            border-radius: 8px;
+            padding: 2px;
+            aspect-ratio: 1;
+            margin: 0 auto;
+            max-width: 320px;
+        }
+
+        .cell {
+            background: #f9fafb;
+            border-radius: 3px;
+            aspect-ratio: 1;
+            transition: background-color 0.1s ease;
+        }
+
+        .cell.snake-head {
+            background: #6366f1;
+            border-radius: 4px;
+            box-shadow: 0 0 8px rgba(99,102,241,0.3);
+        }
+
+        .cell.snake-body {
+            background: #a5b4fc;
+            border-radius: 3px;
+        }
+
+        .cell.food {
+            background: #ef4444;
+            border-radius: 50%;
+            box-shadow: 0 0 6px rgba(239,68,68,0.3);
+        }
+
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 40px);
+            grid-template-rows: repeat(2, 40px);
+            gap: 4px;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+
+        .control-btn {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.12s ease;
+            color: #6b7280;
+        }
+
+        .control-btn:hover {
+            background: #eef2ff;
+            border-color: #6366f1;
+        }
+
+        .control-btn:active, .control-btn.active {
+            background: #eef2ff;
+            color: #6366f1;
+            border-color: #6366f1;
+        }
+
+        .control-btn.empty {
+            visibility: hidden;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 6px;
+            justify-content: center;
+        }
+
+        .keyboard-hint {
+            text-align: center;
+            font-size: 0.65rem;
+            color: #9ca3af;
+            margin-top: 8px;
+        }
+
+        .game-board-wrapper {
+            position: relative;
+        }
+
+        .status-dot.gameover {
+            background: #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="../index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="../index.html">Loom Snake</a></h1>
+        <p class="subtitle">Snake game running on a Loom computer, 137&times;1024 state tensor, no training</p>
+    </header>
+
+    <div class="page-layout">
+        <div class="network-panel" id="networkPanel"></div>
+
+        <div class="main-panel">
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Initializing...</span>
+            </div>
+
+            <div class="panel">
+                <div class="stats-bar">
+                    <div class="stat">
+                        <div class="stat-label">Score</div>
+                        <div class="stat-value" id="score">0</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-label">Length</div>
+                        <div class="stat-value" id="length">1</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-label">Frame</div>
+                        <div class="stat-value" id="frame">0</div>
+                    </div>
+                </div>
+
+                <div class="game-board-wrapper">
+                    <div class="game-board" id="gameBoard"></div>
+                    <div class="overlay hidden" id="gameOverlay">
+                        <span class="overlay-text" id="overlayText">Game Over</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="controls-grid">
+                    <div class="control-btn empty"></div>
+                    <button class="control-btn" id="btnUp" data-dir="0">&uarr;</button>
+                    <div class="control-btn empty"></div>
+                    <button class="control-btn" id="btnLeft" data-dir="3">&larr;</button>
+                    <button class="control-btn" id="btnDown" data-dir="2">&darr;</button>
+                    <button class="control-btn" id="btnRight" data-dir="1">&rarr;</button>
+                </div>
+                <div class="action-buttons">
+                    <button class="btn btn-primary" id="btnStart">Start Game</button>
+                    <button class="btn btn-secondary" id="btnReset">Reset</button>
+                </div>
+                <p class="keyboard-hint">Arrow keys or WASD to move &middot; Space to start/pause</p>
+            </div>
+
+            <!-- Register File -->
+            <div class="panel">
+                <div class="panel-title">Register File</div>
+                <div class="mem-grid" id="memGrid">
+                    <div class="mem-cell"><span class="mem-label">PC</span><span class="mem-value" id="regPC">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">DIR</span><span class="mem-value" id="regDIR">1</span></div>
+                    <div class="mem-cell"><span class="mem-label">HEAD_X</span><span class="mem-value" id="regHX">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">HEAD_Y</span><span class="mem-value" id="regHY">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">FOOD_X</span><span class="mem-value" id="regFX">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">FOOD_Y</span><span class="mem-value" id="regFY">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">SCORE</span><span class="mem-value" id="regSC">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">LEN</span><span class="mem-value" id="regLN">1</span></div>
+                    <div class="mem-cell"><span class="mem-label">H_IDX</span><span class="mem-value" id="regHI">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">T_IDX</span><span class="mem-value" id="regTI">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">ATE</span><span class="mem-value" id="regAT">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">OVER</span><span class="mem-value" id="regOV">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">FRAME</span><span class="mem-value" id="regFR">0</span></div>
+                    <div class="mem-cell"><span class="mem-label">RAND</span><span class="mem-value" id="regRN">0</span></div>
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <h3>How It Works</h3>
+                <p>
+                    This snake game runs entirely on a <strong>Loom computer with no training</strong>.
+                    The transformer's weights are analytically computed to function as a programmable
+                    computer executing a custom instruction set with 22 opcodes.
+                </p>
+                <p>
+                    Each game tick runs <strong>~84 inference steps</strong> through the 8-layer transformer.
+                    Each step executes one instruction: fetching from memory, computing via subtraction,
+                    and conditionally branching, all through matrix multiplications.
+                </p>
+                <p>
+                    State: <code>137&times;1024</code> bipolar tensor &middot;
+                    ISA: <code>22 opcodes</code> &middot;
+                    Program: <code>210 instructions</code>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script src="../common.js"></script>
+    <script>
+    (async function() {
+        let config = null;
+        let state = null;
+        let initialState = null;
+        let gameRunning = false;
+        let pendingInput = 4;
+        let tickInProgress = false;
+        let totalSteps = 0;
+        let prevRegValues = {};
+
+        // DOM
+        const gameBoard = document.getElementById('gameBoard');
+        const scoreEl = document.getElementById('score');
+        const lengthEl = document.getElementById('length');
+        const frameEl = document.getElementById('frame');
+        const overlay = document.getElementById('gameOverlay');
+        const overlayText = document.getElementById('overlayText');
+        const btnStart = document.getElementById('btnStart');
+        const btnReset = document.getElementById('btnReset');
+
+        // Build the shared network panel with register file as extra
+        document.getElementById('networkPanel').innerHTML = buildNetworkPanelHTML();
+
+        // ---- Game Board ----
+        function initBoard() {
+            gameBoard.innerHTML = '';
+            for (let y = 0; y < 8; y++) {
+                for (let x = 0; x < 8; x++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.x = x;
+                    cell.dataset.y = y;
+                    gameBoard.appendChild(cell);
+                }
+            }
+        }
+
+        // ---- Register Display ----
+        function updateRegisters() {
+            if (!state || !config) return;
+
+            const regs = {
+                PC:  getPC(state, config),
+                DIR: readMemory(state, config, config.direction_addr),
+                HX:  readMemory(state, config, config.head_x_addr),
+                HY:  readMemory(state, config, config.head_y_addr),
+                FX:  readMemory(state, config, config.food_x_addr),
+                FY:  readMemory(state, config, config.food_y_addr),
+                SC:  readMemory(state, config, config.score_addr),
+                LN:  readMemory(state, config, config.length_addr),
+                HI:  readMemory(state, config, config.head_idx_addr),
+                TI:  readMemory(state, config, config.tail_idx_addr),
+                AT:  readMemory(state, config, config.ate_addr),
+                OV:  readMemory(state, config, config.game_over_addr),
+                FR:  readMemory(state, config, config.frame_addr),
+                RN:  readMemory(state, config, config.rand_addr),
+            };
+
+            for (const [key, val] of Object.entries(regs)) {
+                const el = document.getElementById('reg' + key);
+                if (el) {
+                    const changed = prevRegValues[key] !== undefined && prevRegValues[key] !== val;
+                    el.textContent = val;
+                    if (changed) {
+                        el.classList.add('changed');
+                        setTimeout(() => el.classList.remove('changed'), 400);
+                    }
+                }
+            }
+            prevRegValues = regs;
+        }
+
+        // ---- Game Tick ----
+        async function runTick() {
+            if (tickInProgress) return;
+            tickInProgress = true;
+
+            const loopAddr = config.loop_addr;
+            let steps = 0;
+            const maxSteps = 5000;
+
+            writeMemory(state, config, config.input_addr, pendingInput);
+            pendingInput = 4;
+
+            // Light up input
+            const inputEl = document.querySelector('.arch-layer[data-layer="input"]');
+            if (inputEl) inputEl.classList.add('active');
+
+            try {
+                const result = await runUntilStop(state, config, {
+                    maxSteps: maxSteps,
+                    stopPC: loopAddr,
+                    onStep: (s, pc, step) => {
+                        state = s;
+                        _currentState = s;
+                        if (step % 8 === 0 || step <= 2) {
+                            renderHeatmap(null, s, config);
+                            updateRegisters();
+                        }
+                    }
+                });
+
+                state = result.state;
+                _currentState = state;
+                totalSteps += result.steps;
+
+                renderHeatmap(null, state, config);
+                updateRegisters();
+                updateStat('statSteps', result.steps);
+                updateStat('statMs', (result.ms / result.steps).toFixed(1));
+                updateStat('statTotal', totalSteps);
+
+                clearLayerAnimation();
+                const outEl = document.querySelector('.arch-layer[data-layer="output"]');
+                if (outEl) {
+                    outEl.classList.add('active');
+                    setTimeout(() => outEl.classList.remove('active'), 200);
+                }
+                if (inputEl) inputEl.classList.remove('active');
+
+                tickInProgress = false;
+                return result.halted;
+            } catch (e) {
+                console.error('Error during tick:', e);
+                clearLayerAnimation();
+                tickInProgress = false;
+                return true;
+            }
+        }
+
+        // ---- Display Update ----
+        function updateDisplay() {
+            const cells = gameBoard.querySelectorAll('.cell');
+            cells.forEach(cell => { cell.className = 'cell'; });
+
+            const headX = readMemory(state, config, config.head_x_addr);
+            const headY = readMemory(state, config, config.head_y_addr);
+            const foodX = readMemory(state, config, config.food_x_addr);
+            const foodY = readMemory(state, config, config.food_y_addr);
+            const score = readMemory(state, config, config.score_addr);
+            const length = readMemory(state, config, config.length_addr);
+            const frame = readMemory(state, config, config.frame_addr);
+            const gameOver = readMemory(state, config, config.game_over_addr);
+
+            const bodyStart = config.body_start_addr || 32;
+            const maxLen = config.max_length || 8;
+
+            for (let i = 0; i < maxLen; i++) {
+                const bx = readMemory(state, config, bodyStart + i * 2);
+                const by = readMemory(state, config, bodyStart + i * 2 + 1);
+                if (bx >= 0 && bx < 8 && by >= 0 && by < 8) {
+                    const idx = by * 8 + bx;
+                    if (cells[idx] && !cells[idx].classList.contains('snake-head')) {
+                        cells[idx].classList.add('snake-body');
+                    }
+                }
+            }
+
+            if (headX >= 0 && headX < 8 && headY >= 0 && headY < 8) {
+                const headIdx = headY * 8 + headX;
+                cells[headIdx].className = 'cell snake-head';
+            }
+
+            if (foodX >= 0 && foodX < 8 && foodY >= 0 && foodY < 8) {
+                const foodIdx = foodY * 8 + foodX;
+                if (!cells[foodIdx].classList.contains('snake-head') &&
+                    !cells[foodIdx].classList.contains('snake-body')) {
+                    cells[foodIdx].classList.add('food');
+                }
+            }
+
+            scoreEl.textContent = score;
+            lengthEl.textContent = length;
+            frameEl.textContent = frame;
+
+            // Inject fresh RNG seed after eating (the ISA program handles
+            // collision-free food placement via its respawn loop)
+            const ate = readMemory(state, config, config.ate_addr);
+            if (ate !== 0) {
+                const freshRand = Math.floor(Math.random() * 251) - 125;
+                writeMemory(state, config, config.rand_addr, freshRand);
+            }
+
+            if (gameOver !== 0) {
+                setStatus('gameover', 'Game Over - Score: ' + score);
+                overlay.classList.remove('hidden');
+                overlayText.textContent = 'Game Over - Score: ' + score;
+                gameRunning = false;
+                btnStart.textContent = 'Start Game';
+            }
+        }
+
+        // ---- Game Loop ----
+        async function gameLoop() {
+            if (!gameRunning) return;
+            setStatus('running', 'Running...');
+            const halted = await runTick();
+            updateDisplay();
+            if (!halted && gameRunning) {
+                setTimeout(gameLoop, 150);
+            }
+        }
+
+        function toggleGame() {
+            if (gameRunning) {
+                gameRunning = false;
+                btnStart.textContent = 'Resume';
+                setStatus('ready', 'Paused');
+            } else {
+                const gameOver = readMemory(state, config, config.game_over_addr);
+                if (gameOver !== 0) resetGame();
+                gameRunning = true;
+                btnStart.textContent = 'Pause';
+                overlay.classList.add('hidden');
+                gameLoop();
+            }
+        }
+
+        function resetGame() {
+            state = copyState(initialState);
+            _currentState = state;
+            gameRunning = false;
+            pendingInput = 4;
+            totalSteps = 0;
+            prevRegValues = {};
+            btnStart.textContent = 'Start Game';
+            overlay.classList.add('hidden');
+            setStatus('ready', 'Ready - Press Start');
+            updateDisplay();
+            renderHeatmap(null, state, config);
+            updateRegisters();
+            updateStat('statSteps', 0);
+            updateStat('statMs', 0);
+            updateStat('statTotal', 0);
+            clearLayerAnimation();
+        }
+
+        function handleInput(direction) {
+            if (!gameRunning) return;
+            pendingInput = direction;
+            const buttons = document.querySelectorAll('.control-btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            const activeBtn = document.querySelector('[data-dir="' + direction + '"]');
+            if (activeBtn) {
+                activeBtn.classList.add('active');
+                setTimeout(() => activeBtn.classList.remove('active'), 100);
+            }
+        }
+
+        // Keyboard
+        document.addEventListener('keydown', (e) => {
+            const keyMap = {
+                'ArrowUp': 0, 'w': 0, 'W': 0,
+                'ArrowRight': 1, 'd': 1, 'D': 1,
+                'ArrowDown': 2, 's': 2, 'S': 2,
+                'ArrowLeft': 3, 'a': 3, 'A': 3
+            };
+            if (keyMap.hasOwnProperty(e.key)) {
+                e.preventDefault();
+                handleInput(keyMap[e.key]);
+            }
+            if (e.key === ' ') {
+                e.preventDefault();
+                toggleGame();
+            }
+        });
+
+        // Button controls
+        document.querySelectorAll('.control-btn[data-dir]').forEach(btn => {
+            btn.addEventListener('click', () => handleInput(parseInt(btn.dataset.dir)));
+        });
+        btnStart.addEventListener('click', toggleGame);
+        btnReset.addEventListener('click', resetGame);
+
+        // ---- Init ----
+        initBoard();
+        setStatus('loading', 'Loading model...');
+
+        try {
+            const backend = await loadONNXModel('../programs/argmax_155x1024.onnx');
+            updateStat('statBackend', backend);
+
+            const configResponse = await fetch('config.json');
+            config = await configResponse.json();
+            config.body_start_addr = config.body_start_addr || 32;
+            config.max_length = config.max_length || 8;
+
+            // Derive row indices from config
+            if (!config.idx_scratchpad) config.idx_scratchpad = config.idx_memory + config.N;
+            if (!config.idx_pos_enc) config.idx_pos_enc = config.idx_pc + config.logn;
+            if (!config.idx_buffer) config.idx_buffer = config.idx_pos_enc + config.logn;
+
+            initialState = await loadInitialState('initial_state.json');
+            state = copyState(initialState);
+            _currentState = state;
+            _currentConfig = config;
+
+            setStatus('ready', 'Ready - Press Start (' + backend + ')');
+            updateDisplay();
+            renderHeatmap(null, state, config);
+            updateRegisters();
+
+        } catch (error) {
+            console.error('Initialization error:', error);
+            setStatus('error', 'Error: ' + error.message);
+        }
+    })();
+    </script>
+</body>
+</html>

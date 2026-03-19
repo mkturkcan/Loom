@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flood Fill — Loom</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <link rel="stylesheet" href="common.css">
+    <script src="c_compiler.js"></script>
+    <script src="isa_interpreter.js"></script>
+    <style>
+        .grid-container {
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+            padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .fill-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 52px);
+            grid-template-rows: repeat(8, 52px);
+            gap: 2px; justify-content: center; margin: 0 auto;
+        }
+        .fill-cell {
+            border-radius: 4px; cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.15s;
+            border: 1px solid rgba(0,0,0,0.08);
+        }
+        .fill-cell:hover { transform: scale(1.06); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+        .fill-cell.filling { animation: pulse 0.3s ease; }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.15); }
+            100% { transform: scale(1); }
+        }
+
+        .palette {
+            display: flex; gap: 6px; justify-content: center; margin: 16px 0 8px;
+        }
+        .palette-swatch {
+            width: 32px; height: 32px; border-radius: 6px; cursor: pointer;
+            border: 2px solid transparent; transition: all 0.15s;
+        }
+        .palette-swatch:hover { transform: scale(1.1); }
+        .palette-swatch.active { border-color: #111827; box-shadow: 0 0 0 2px #6366f1; }
+
+        .controls {
+            display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+            padding: 12px 16px; background: #fff; border: 1px solid #e5e7eb;
+            border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .controls button {
+            font-family: inherit; font-size: 0.8rem; padding: 8px 14px;
+            border-radius: 8px; border: 1px solid #d1d5db; cursor: pointer; font-weight: 600;
+        }
+        .mode-btn { color: #fff; border: none; }
+        .mode-btn.isa { background: #10b981; }
+        .mode-btn.onnx { background: #3b82f6; }
+        .btn-fill { background: #6366f1; color: #fff; border-color: #6366f1; }
+        .btn-reset { background: #fff; color: #374151; }
+        .btn-wall { background: #374151; color: #fff; border-color: #374151; }
+        .btn-wall.active { background: #ef4444; border-color: #ef4444; }
+
+        .stats {
+            display: flex; gap: 16px; padding: 10px 16px;
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+            font-size: 0.75rem; color: #6b7280;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .stats strong { color: #374151; }
+
+        .code-body { max-height: 280px; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="index.html" class="back-link">&larr; All Demos</a>
+        <h1><a href="index.html">Loom Flood Fill</a></h1>
+        <p class="subtitle">
+            Click a cell to flood fill from that point. The fill algorithm runs as compiled C
+            on the 146x512 transformer. Each colored cell is the result of transformer forward passes.
+        </p>
+    </header>
+
+    <div class="page-layout">
+        <div class="network-panel" id="networkPanel"></div>
+
+        <div class="main-panel">
+            <div class="controls">
+                <button class="mode-btn isa" id="modeBtn">ISA Interpreter</button>
+                <button class="btn-wall" id="wallBtn">Draw Walls</button>
+                <button class="btn-reset" id="btnReset">Reset</button>
+                <button class="btn-reset" id="btnRandom">Random Walls</button>
+                <div style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:0.7rem;color:#9ca3af">
+                    <label>ONNX speed</label>
+                    <input type="range" id="speedSlider" min="1" max="50" value="10" style="width:80px;accent-color:#6366f1">
+                    <span id="speedLabel">10 steps/yield</span>
+                </div>
+            </div>
+
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Loading...</span>
+            </div>
+
+            <div class="grid-container">
+                <div class="palette" id="palette"></div>
+                <div class="fill-grid" id="fillGrid"></div>
+            </div>
+
+            <div class="stats">
+                <span>Steps: <strong id="statSteps">0</strong></span>
+                <span>Cells filled: <strong id="statFilled">0</strong></span>
+                <span>Time: <strong id="statTime">0</strong> ms</span>
+                <span>Engine: <strong id="statEngine">ISA</strong></span>
+            </div>
+
+            <div class="code-panel">
+                <div class="code-header">
+                    <span class="code-header-title">Flood Fill: C Source</span>
+                    <span style="font-size:0.7rem;color:#9ca3af" id="instrCount"></span>
+                </div>
+                <div class="code-body" id="codeBody"></div>
+            </div>
+
+            <div class="info-panel">
+                <h3>How It Works</h3>
+                <p>
+                    The C source compiles to <strong id="instrCountDesc">0</strong> ISA instructions.
+                    The flood fill uses a stack-based iterative approach: pop a cell, color it,
+                    push uncolored neighbors. Each cell fill takes ~8 ISA instructions.
+                    Walls (black cells) block the fill. Click any non-wall cell to start filling.
+                </p>
+                <p>
+                    <strong>ISA Interpreter</strong> executes instantly.
+                    <strong>ONNX Transformer</strong> runs each instruction as a 146x512 matrix
+                    multiply via WebGPU. You can watch the fill spread cell by cell through
+                    the neural network.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script src="common.js"></script>
+    <script>
+    (async function() {
+        const W = 8, H = 8, TOTAL = W * H;
+
+        // Colors: 0=empty(white), 1=wall(black), 2-7=fill colors
+        const COLORS = ['#f9fafb', '#1f2937', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+        const COLOR_NAMES = ['Empty', 'Wall', 'Red', 'Blue', 'Green', 'Yellow', 'Purple', 'Pink'];
+
+        let gridData = new Array(TOTAL).fill(0);
+        let selectedColor = 2; // red
+        let drawingWalls = false;
+        let filling = false;
+        let useISA = true;
+        let onnxLoaded = false;
+
+        let compileResult = null;
+        let isaInterpreter = null;
+
+        const gridEl = document.getElementById('fillGrid');
+        const modeBtn = document.getElementById('modeBtn');
+        const wallBtn = document.getElementById('wallBtn');
+
+        document.getElementById('networkPanel').innerHTML = buildNetworkPanelHTML();
+
+        // ---- Flood fill C source ----
+        const FILL_SOURCE = `int main() {
+    int grid[64];
+    int stack[64];
+    int sp;
+    int target;
+    int fill;
+    int x; int y; int pos;
+    int nx; int ny; int npos;
+    int cur;
+
+    while (sp > 0) {
+        sp = sp - 1;
+        pos = stack[sp];
+
+        y = 0; cur = pos;
+        while (cur >= 8) { cur = cur - 8; y = y + 1; }
+        x = cur;
+
+        if (grid[pos] == target) {
+            grid[pos] = fill;
+
+            nx = x + 1;
+            if (nx < 8) {
+                npos = pos + 1;
+                if (grid[npos] == target) { stack[sp] = npos; sp = sp + 1; }
+            }
+            nx = x - 1;
+            if (nx >= 0) {
+                npos = pos - 1;
+                if (grid[npos] == target) { stack[sp] = npos; sp = sp + 1; }
+            }
+            ny = y + 1;
+            if (ny < 8) {
+                npos = pos + 8;
+                if (grid[npos] == target) { stack[sp] = npos; sp = sp + 1; }
+            }
+            ny = y - 1;
+            if (ny >= 0) {
+                npos = pos - 8;
+                if (grid[npos] == target) { stack[sp] = npos; sp = sp + 1; }
+            }
+        }
+    }
+    return 0;
+}`;
+
+        buildCodeView(FILL_SOURCE, 'codeBody');
+
+        // ---- Palette ----
+        const paletteEl = document.getElementById('palette');
+        for (let i = 2; i < COLORS.length; i++) {
+            const sw = document.createElement('div');
+            sw.className = 'palette-swatch' + (i === selectedColor ? ' active' : '');
+            sw.style.background = COLORS[i];
+            sw.title = COLOR_NAMES[i];
+            sw.onclick = () => {
+                selectedColor = i;
+                document.querySelectorAll('.palette-swatch').forEach(s => s.classList.remove('active'));
+                sw.classList.add('active');
+            };
+            paletteEl.appendChild(sw);
+        }
+
+        // ---- Grid rendering ----
+        function renderGrid(animate) {
+            gridEl.innerHTML = '';
+            for (let i = 0; i < TOTAL; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'fill-cell';
+                cell.style.background = COLORS[gridData[i]] || COLORS[0];
+                cell.dataset.idx = i;
+
+                cell.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    if (filling) return;
+                    if (drawingWalls) {
+                        gridData[i] = gridData[i] === 1 ? 0 : 1;
+                        renderGrid();
+                    } else if (gridData[i] !== 1) {
+                        startFill(i);
+                    }
+                });
+                cell.addEventListener('mouseenter', (e) => {
+                    if (drawingWalls && e.buttons === 1 && !filling) {
+                        gridData[i] = 1;
+                        renderGrid();
+                    }
+                });
+
+                gridEl.appendChild(cell);
+            }
+        }
+
+        // ---- Random walls ----
+        function randomWalls() {
+            gridData.fill(0);
+            // Create some wall patterns
+            const patterns = [
+                // Horizontal bars
+                () => { for (let r = 2; r <= 5; r += 3) for (let c = 1; c < 7; c++) if (Math.random() < 0.6) gridData[r*W+c] = 1; },
+                // Vertical bars
+                () => { for (let c = 2; c <= 5; c += 3) for (let r = 1; r < 7; r++) if (Math.random() < 0.6) gridData[r*W+c] = 1; },
+                // Random scatter
+                () => { for (let i = 0; i < TOTAL; i++) if (Math.random() < 0.2) gridData[i] = 1; },
+                // Cross
+                () => { for (let i = 0; i < 8; i++) { gridData[3*W+i] = 1; gridData[i*W+4] = 1; } gridData[3*W+4] = 0; },
+                // Maze-like
+                () => {
+                    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+                        if (r % 2 === 0 && c > 0 && c < 7 && Math.random() < 0.4) gridData[r*W+c] = 1;
+                        if (c % 2 === 0 && r > 0 && r < 7 && Math.random() < 0.4) gridData[r*W+c] = 1;
+                    }
+                },
+            ];
+            patterns[Math.floor(Math.random() * patterns.length)]();
+            renderGrid();
+        }
+
+        // ---- Fill execution ----
+        async function startFill(startPos) {
+            if (filling) return;
+            const targetColor = gridData[startPos];
+            if (targetColor === 1) return; // Can't fill walls
+            if (targetColor === selectedColor) return; // Already this color
+
+            filling = true;
+            const t0 = performance.now();
+            let totalSteps = 0;
+            let cellsFilled = 0;
+
+            const prevGrid = gridData.slice();
+
+            if (useISA) {
+                // ISA path: instant
+                setStatus('running', 'Filling (ISA)...');
+                const interp = createInterpreter(compileResult);
+                const vars = compileResult.meta.variables;
+
+                // Load grid
+                for (let i = 0; i < TOTAL; i++) interp.writeVar(vars.grid + i, gridData[i]);
+                // Set fill params: push start pos, set target & fill color
+                interp.writeVar(vars.sp, 1);
+                interp.writeVar(vars.stack, startPos);
+                interp.writeVar(vars.target, targetColor);
+                interp.writeVar(vars.fill, selectedColor);
+
+                const result = interp.run(100000);
+                totalSteps = result.steps;
+
+                // Read back grid
+                for (let i = 0; i < TOTAL; i++) {
+                    const v = interp.readVar(vars.grid + i);
+                    if (v !== gridData[i]) cellsFilled++;
+                    gridData[i] = v;
+                }
+                renderGrid();
+
+            } else {
+                // ONNX path: step by step with visualization
+                setStatus('running', 'Filling (ONNX)...');
+                const cfg = compileResult.config;
+                let state = buildStateTensor(compileResult);
+                _currentState = state;
+                _currentConfig = cfg;
+                const vars = compileResult.meta.variables;
+
+                // Load grid into state
+                for (let i = 0; i < TOTAL; i++) writeMemory(state, cfg, vars.grid + i, gridData[i]);
+                // Set fill params
+                writeMemory(state, cfg, vars.sp, 1);
+                writeMemory(state, cfg, vars.stack, startPos);
+                writeMemory(state, cfg, vars.target, targetColor);
+                writeMemory(state, cfg, vars.fill, selectedColor);
+
+                const batchSize = parseInt(document.getElementById('speedSlider').value);
+
+                while (true) {
+                    const result = await runUntilStopFast(state, cfg, batchSize);
+                    state = result.state;
+                    _currentState = state;
+                    totalSteps += result.steps;
+
+                    // Read grid and update display
+                    cellsFilled = 0;
+                    for (let i = 0; i < TOTAL; i++) {
+                        const v = readMemory(state, cfg, vars.grid + i);
+                        gridData[i] = v;
+                        if (v !== prevGrid[i]) cellsFilled++;
+                    }
+                    renderGrid();
+                    document.getElementById('statSteps').textContent = totalSteps;
+                    document.getElementById('statFilled').textContent = cellsFilled;
+                    document.getElementById('statTime').textContent = Math.round(performance.now() - t0);
+
+                    if (result.halted) break;
+                    await new Promise(r => setTimeout(r, 0));
+                }
+            }
+
+            const elapsed = Math.round(performance.now() - t0);
+            document.getElementById('statSteps').textContent = totalSteps;
+            document.getElementById('statFilled').textContent = cellsFilled;
+            document.getElementById('statTime').textContent = elapsed;
+            updateStat('statSteps', totalSteps);
+            updateStat('statTotal', totalSteps);
+            if (totalSteps > 0) updateStat('statMs', (elapsed / totalSteps).toFixed(2));
+
+            setStatus('done', `Filled ${cellsFilled} cells in ${totalSteps} steps (${elapsed}ms)`);
+            filling = false;
+        }
+
+        // ---- Controls ----
+        wallBtn.addEventListener('click', function() {
+            drawingWalls = !drawingWalls;
+            this.classList.toggle('active', drawingWalls);
+            this.textContent = drawingWalls ? 'Stop Drawing' : 'Draw Walls';
+        });
+
+        document.getElementById('btnReset').addEventListener('click', () => {
+            filling = false; gridData.fill(0);
+            renderGrid(); setStatus('ready', 'Ready. Click a cell to fill');
+            document.getElementById('statSteps').textContent = '0';
+            document.getElementById('statFilled').textContent = '0';
+            document.getElementById('statTime').textContent = '0';
+        });
+
+        document.getElementById('btnRandom').addEventListener('click', () => {
+            if (filling) return;
+            randomWalls();
+            setStatus('ready', 'Walls placed. Click a cell to fill');
+        });
+
+        modeBtn.addEventListener('click', function() {
+            if (!onnxLoaded && !useISA) return;
+            if (!onnxLoaded) {
+                this.textContent = 'Loading ONNX...';
+                loadONNXModel('programs/argmax_146x512.onnx').then(backend => {
+                    onnxLoaded = true;
+                    useISA = false;
+                    this.textContent = 'ONNX Transformer';
+                    this.className = 'mode-btn onnx';
+                    document.getElementById('statEngine').textContent = 'ONNX ' + backend;
+                    updateStat('statBackend', 'ONNX ' + backend);
+                }).catch(err => {
+                    this.textContent = 'ISA Interpreter';
+                    console.error('ONNX load failed:', err);
+                });
+                return;
+            }
+            useISA = !useISA;
+            if (useISA) {
+                this.textContent = 'ISA Interpreter';
+                this.className = 'mode-btn isa';
+                document.getElementById('statEngine').textContent = 'ISA';
+            } else {
+                this.textContent = 'ONNX Transformer';
+                this.className = 'mode-btn onnx';
+                document.getElementById('statEngine').textContent = 'ONNX';
+            }
+        });
+
+        document.getElementById('speedSlider').addEventListener('input', function() {
+            document.getElementById('speedLabel').textContent = this.value + ' steps/yield';
+        });
+
+        // ---- Init ----
+        setStatus('loading', 'Compiling C source...');
+        try {
+            compileResult = compileC(FILL_SOURCE, 32, 160, 512, 8);
+            const numInstr = compileResult.commands.length;
+            document.getElementById('instrCount').textContent = `${numInstr} instructions`;
+            document.getElementById('instrCountDesc').textContent = numInstr;
+
+            randomWalls();
+            setStatus('ready', 'Ready. Click any non-wall cell to fill');
+        } catch (err) {
+            console.error('Compile error:', err);
+            setStatus('error', 'Compile error: ' + err.message);
+        }
+    })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+{
+  "name": "collatz",
+  "title": "Collatz Steps",
+  "description": "Count Collatz steps for n=6 (6->3->10->5->16->8->4->2->1 = 8 steps)",
+  "source": "int main() {\n    int n = 6;\n    int steps = 0;\n    while (n != 1) {\n        int odd = n & 1;\n        if (odd != 0) {\n            n = n + n + n + 1;\n        } else {\n            int half = 0;\n            int test = 0;\n            while (test + test < n) {\n                half += 1;\n                test = half;\n            }\n            n = half;\n        }\n        steps += 1;\n    }\n    return steps;\n}\n",
+  "variables": {
+    "n": 9,
+    "steps": 11,
+    "odd": 12,
+    "half": 13,
+    "test": 14
+  },
+  "num_instructions": 33,
+  "opcode_counts": {
+    "MOV": 15,
+    "SUB": 3,
+    "JZ": 2,
+    "AND": 1,
+    "ADD": 6,
+    "JMP": 4,
+    "CMP": 1,
+    "HALT": 1
+  },
+  "source_map": {
+    "96": 2,
+    "97": 3,
+    "98": 4,
+    "101": 5,
+    "104": 6,
+    "107": 7,
+    "113": 9,
+    "114": 10,
+    "115": 11,
+    "121": 12,
+    "122": 13,
+    "124": 15,
+    "125": 17,
+    "127": 19
+  },
+  "retval_addr": 7,
+  "output_addr": 8,
+  "expected": {
+    "RETVAL": 8
+  },
+  "config": {
+    "s": 32,
+    "m": 64,
+    "n": 1024,
+    "N": 8,
+    "d_model": 155,
+    "logn": 10,
+    "idx_memory": 30,
+    "idx_pc": 84,
+    "idx_pos_enc": 94,
+    "idx_tag": 146
+  }
+}
