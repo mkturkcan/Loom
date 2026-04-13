@@ -111,10 +111,14 @@ refs.bib                 Bibliography
 ## Citation
 
 ```bibtex
-@article{turkcan2026loom,
-  title={Loom: A Scalable Computer Architecture for Looped Transformers},
-  author={Turkcan, Mehmet Kerem},
-  year={2026}
+@misc{turkcan2026loomscalableanalyticalneural,
+      title={Loom: A Scalable Analytical Neural Computer Architecture}, 
+      author={Mehmet Kerem Turkcan},
+      year={2026},
+      eprint={2604.08816},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2604.08816}, 
 }
 ```
 
